@@ -1,0 +1,2297 @@
+% ============================================================================
+% Dual-Graph Task Control with Persistent Memory for Structured
+% Information-Gathering Agents
+% Target: Nature Machine Intelligence
+% Revised Draft v2 — [PH:...] marks content to be generated
+% ============================================================================
+
+\documentclass[11pt,a4paper]{article}
+
+% --- Core packages ---
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage{amsmath,amssymb,amsfonts,amsthm}
+\usepackage{algorithm}
+\usepackage{algorithmic}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{natbib}
+\usepackage{hyperref}
+\usepackage{xcolor}
+\usepackage{enumitem}
+\usepackage{subcaption}
+\usepackage{tabularx}
+\usepackage{multirow}
+\usepackage{tcolorbox}
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta,positioning,shapes,calc,decorations.pathreplacing}
+\usepackage{pgfplots}
+\pgfplotsset{compat=1.18}
+
+% --- Theorem environments ---
+\newtheorem{theorem}{Theorem}
+\newtheorem{proposition}{Proposition}
+\newtheorem{lemma}{Lemma}
+\newtheorem{definition}{Definition}
+\newtheorem{corollary}{Corollary}
+\newtheorem{remark}{Remark}
+
+% --- Placeholder command ---
+\newcommand{\placeholder}[1]{%
+  \begin{tcolorbox}[colback=yellow!10,colframe=orange!60!black,
+    fonttitle=\bfseries,title=Placeholder]
+    #1
+  \end{tcolorbox}%
+}
+
+% --- Author note command ---
+\newcommand{\authornote}[1]{%
+  {\color{red}\textbf{[Author Note:} #1\textbf{]}}%
+}
+
+\title{%
+  MOSAIC: Structured Information Gathering via Dual-Graph Task Control and Persistent Memory
+}
+
+\author{
+  [Author list to be finalized]\\
+  \\
+  \small $^1$[Affiliation 1]\\
+  \small $^2$[Affiliation 2]\\
+  \small $^*$Correspondence: [email]
+}
+
+\date{}
+
+\begin{document}
+\maketitle
+
+% ============================================================================
+% ABSTRACT (~150 words for NMI)
+% ============================================================================
+\begin{abstract}
+Large language model agents augmented with persistent memory can recall
+past interactions but frequently fail at structured information-gathering
+tasks, terminating prematurely, under-asking, or drifting off target.
+We identify the root cause: memory enables \emph{retention} but not
+\emph{task completeness}; without explicit control over which information
+remains to be collected, agents satisfice rather than optimize. We introduce
+\textbf{DualGraph}, a domain-agnostic framework that imposes task-directed
+control on memory-augmented agents through two complementary graphs:
+a \emph{prerequisite graph} encoding dependency constraints and an
+\emph{association graph} encoding semantic relatedness for coherent topic
+transitions. A central theoretical insight is \emph{neighbor-conditioned
+stability} (NCS): a node's state requires re-evaluation only when its graph
+neighborhood changes, yielding a local-update principle analogous to
+Bellman optimality in dynamic programming. Critically, the task graph need
+not be specified in advance: DualGraph supports \emph{evolving inference
+DAGs} that grow online as users reveal unanticipated information, with NCS
+guaranteeing that new-node attachment propagates only through the local
+neighborhood without destabilizing ongoing traversal. An entropy-based
+importance scorer with community-aware traversal drives systematic coverage
+while maintaining natural dialogue flow. We provide convergence guarantees
+via submodular coverage analysis and demonstrate that DualGraph substantially
+outperforms memory-only agents, ReAct, Reflexion, Plan-and-Solve,
+MemGPT, and Mem0~\cite{mem0_2025} across four domains: clinical intake
+(hypertension and diabetes) and two non-medical structured tasks
+(\placeholder{e.g., insurance claims, technical support triage}).
+On cases requiring dynamic graph evolution, static-graph methods degrade
+by [X]\% while DualGraph with evolving DAGs maintains [Y]\% acquisition.
+In a prospective pilot with [N] clinician-supervised patient interactions,
+DualGraph achieved [X]\% entity acquisition with [Y]\% concordance.
+\placeholder{Refine after experiments.}
+\end{abstract}
+
+\vspace{1em}
+\noindent\textbf{Keywords:} AI agents, task-oriented dialogue, information
+gathering, graph-based control, long-term memory, multi-turn interaction,
+neighbor-conditioned stability, evolving inference DAG
+
+\vspace{1em}
+\noindent\textbf{Keywords:} AI agents, task-oriented dialogue, information
+gathering, graph-based control, long-term memory, multi-turn interaction,
+neighbor-conditioned stability
+
+% ============================================================================
+% 1. INTRODUCTION
+% ============================================================================
+\section{Introduction}
+\label{sec:intro}
+
+% --- Opening: the agent memory illusion ---
+The proliferation of memory-augmented LLM agents has created an implicit
+assumption: that an agent which remembers is an agent that completes its task.
+Systems such as MemGPT~\cite{packer2023memgpt}, Mem0~\cite{mem0_2024},
+and A-Mem~\cite{amem_2024} have demonstrated impressive retention of user
+preferences, factual history, and contextual nuance across sessions. Yet a
+growing body of evidence reveals a disconnect between \emph{recall} and
+\emph{task completion}: memory-augmented agents routinely terminate
+conversations prematurely, miss required information, or drift into tangential
+topics when no explicit mechanism enforces systematic
+coverage~\cite{ref_interaction_failure_1, ref_interaction_failure_2}.
+
+\placeholder{%
+  \textbf{Paragraph 2: Quantify the problem.}
+  Cite 2--3 recent studies (2024--2025) showing that LLM agents with memory
+  fail at structured tasks. Include:
+  \begin{itemize}[noitemsep]
+    \item The Sharma et al.\ (2024) Nature Medicine study (ref48 in DrHyper)
+          showing that strong LLM performance does not translate to reliable
+          real-world assistance.
+    \item Evidence from customer-service / clinical / legal settings where
+          incomplete information gathering caused downstream errors.
+    \item Statistics on premature termination rates in existing agent
+          benchmarks (e.g., WebArena, AgentBench, or similar).
+  \end{itemize}
+}
+
+% --- Core insight: three primitives ---
+The root cause, we argue, is a missing architectural primitive. Current agent
+frameworks provide two capabilities: \emph{action selection} (choosing what to
+do next) and \emph{memory} (storing what was learned). But structured
+information-gathering tasks require a third: \emph{task-state tracking}---a
+persistent, queryable representation of which required information units have
+been obtained, which remain outstanding, and what dependencies constrain the
+order in which they should be sought. Without this, an agent cannot distinguish
+between ``I have enough information to stop'' and ``I have run out of things
+that are easy to ask.''
+
+This distinction is not merely engineering detail. In clinical intake, a missed
+medication history propagates into incorrect risk stratification and potentially
+harmful prescribing. In insurance claims processing, a missing liability
+determination invalidates downstream adjudication. In technical support, an
+undiagnosed hardware failure leads to repeated software-only fixes. The common
+structure across these domains is a \emph{partially observable information
+space} with \emph{prerequisite constraints} and \emph{coverage requirements}
+that must be systematically satisfied through multi-turn interaction.
+
+% --- Why graphs are the right abstraction ---
+A deeper question is \emph{why graphs} rather than simpler task
+representations such as flat checklists, priority queues, or plan templates.
+The answer lies in a structural property of real information-gathering tasks:
+\emph{local dependency}. Whether a particular information entity needs to be
+queried, re-queried, or deprioritized depends not on the global state of
+the entire conversation but on the states of a small set of semantically
+or logically related entities---its \emph{graph neighbors}. Knowing a
+patient's creatinine level affects the importance of asking about nephropathy
+but not about smoking history. Confirming the date of an accident changes the
+relevance of weather-condition queries but not vehicle-make queries. This
+locality is precisely what graph structure encodes and what flat
+representations discard.
+
+We formalize this insight as \emph{neighbor-conditioned stability}: a node's
+importance score, belief state, and priority require re-evaluation only when
+at least one of its graph neighbors has changed state. When the local
+neighborhood is unchanged, the node's state is guaranteed stable. This
+principle is closely analogous to Bellman's principle of optimality in dynamic
+programming~\cite{bellman1957dynamic}, which decomposes a global optimization
+into local value updates that propagate through a state-transition graph.
+Just as dynamic programming avoids redundant global recomputation by exploiting
+local structure, DualGraph avoids redundant re-evaluation of entity priorities
+by exploiting the dependency and association structure encoded in the task
+graph.
+
+% --- Our contribution ---
+We introduce \textbf{DualGraph}, a framework that addresses the
+memory-completeness gap by imposing structured task control on
+memory-augmented LLM agents through two complementary graphs over required
+information units (entities):
+
+\begin{enumerate}[noitemsep]
+  \item A \textbf{prerequisite graph} $G_P = (V, E_P)$ encoding hard
+        dependency constraints: entity $u$ must be resolved before entity $v$
+        can be meaningfully queried.
+  \item An \textbf{association graph} $G_A = (V, E_A)$ encoding semantic
+        relatedness: entities $u$ and $v$ belong to the same conceptual
+        cluster, so transitioning between them preserves conversational
+        coherence.
+\end{enumerate}
+
+\noindent At each dialogue turn, an entropy-based importance scorer identifies
+the highest-value unresolved entity, subject to prerequisite satisfaction and
+community-aware continuity preferences. Extracted information is committed to
+a structured long-term memory with confidence gating, and the dual-graph state
+is updated according to the neighbor-conditioned stability principle---only
+nodes in the local neighborhood of updated entities are re-scored. The
+framework is domain-agnostic: the only domain-specific input is the task graph
+itself, which we show can be constructed semi-automatically from task
+specifications using an LLM with expert validation.
+
+Our contributions are:
+
+\begin{enumerate}
+  \item \textbf{Formal framework with neighbor-conditioned stability.} We
+        formalize structured information gathering as a constrained coverage
+        problem over dual graphs and introduce the neighbor-conditioned
+        stability principle, which provides consistency guarantees and
+        connects the framework to dynamic programming theory. We derive
+        convergence bounds via submodular optimization
+        (Section~\ref{sec:theory}).
+  \item \textbf{Evolving inference DAGs.} We extend the framework from
+        static pre-specified graphs to dynamically growing task DAGs that
+        accommodate emergent information entities discovered during dialogue.
+        NCS guarantees that online node attachment propagates only through
+        the local neighborhood, preserving traversal stability. We provide
+        formal correctness guarantees and demonstrate substantial performance
+        gains on cases with unanticipated information
+        (Sections~\ref{sec:results_evolving} and~\ref{sec:theory_evolving}).
+  \item \textbf{Automated graph construction.} We present a pipeline for
+        semi-automatic construction of prerequisite and association graphs
+        from textual task specifications, with quantified inter-annotator
+        agreement against expert-designed graphs
+        (Section~\ref{sec:results_graph_construction}).
+  \item \textbf{Multi-domain evaluation.} We evaluate DualGraph across four
+        information-gathering domains---hypertension clinical intake, diabetes
+        clinical intake, \placeholder{Domain 3}, and \placeholder{Domain
+        4}---against six baselines including ReAct, Reflexion, Plan-and-Solve,
+        MemGPT, Mem0, and memory-only LLMs (Section~\ref{sec:results}).
+  \item \textbf{Prospective pilot.} We report a clinician-supervised pilot
+        with [N] real patient interactions demonstrating feasibility and safety
+        (Section~\ref{sec:results_downstream}).
+  \item \textbf{Mechanistic analysis.} Through ablations organized around
+        the NCS principle, we identify when and why dual-graph control
+        helps---and when single-graph or memory-only architectures
+        suffice---as a function of task graph structure
+        (Section~\ref{sec:results_mechanism}).
+\end{enumerate}
+
+% ============================================================================
+% 2. RESULTS
+% ==========================================================================
+% ============================================================================
+% 2. RESULTS
+% ============================================================================
+\section{Results}
+\label{sec:results}
+
+% NMI convention: Results before Methods.
+% Narrative arc:
+%   2.1  Is there a problem? (memory-completeness gap)
+%   2.2  Does the basic framework solve it? (baselines)
+%   2.3  Does it handle unanticipated information? (evolving DAG)
+%   2.4  Why does it work? (NCS mechanism)
+%   2.5  Does it generalize cheaply? (graph construction)
+%   2.6  Does upstream improvement cause downstream improvement? (decisions + pilot)
+
+% ----------------------------------------------------------------------------
+\subsection{Memory alone is insufficient for structured information gathering}
+\label{sec:results_memory_gap}
+
+To establish the core motivation empirically, we compare a strong
+memory-augmented agent (base LLM + persistent memory, no task control) against
+the same base LLM with DualGraph across all four evaluation domains. This
+isolates the effect of task-directed graph control while holding the memory
+mechanism and base model constant. The memory-only baseline uses the same
+LLM (Qwen-2.5-32B) with an adaptive memory module~\cite{amem_2024} that
+provides automatic storage, retrieval, and summarization of conversational
+history---a configuration directly comparable to production-grade memory
+systems such as Mem0~\cite{mem0_2025}, which reports $+$26\% accuracy over
+OpenAI Memory on the LoCoMo benchmark, 91\% faster responses than
+full-context baselines, and 90\% lower token usage.
+
+\placeholder{%
+  \textbf{Figure 1: The memory--completeness gap.}\\
+  Panel (a): DualGraph architecture schematic showing the dual graphs
+  ($G_P$ and $G_A$), the NCS update mechanism (highlight the update frontier
+  $\mathcal{U}_t$ after a single entity resolves), persistent memory with
+  confidence gating, and the LLM controller. Annotate the evolving-DAG
+  extension with a dashed region showing where new nodes attach.\\
+  Panel (b): Entity acquisition rate (\%) for memory-only vs.\ DualGraph
+  across 4 domains (grouped bar chart with 95\% CIs).\\
+  Panel (c): Mean conversation turns per domain (DualGraph sustains longer,
+  more thorough dialogues).\\
+  Panel (d): Entity acquisition accumulation over turns for three
+  representative cases (one per difficulty tier), annotated with community
+  labels showing coherent topic traversal.
+}
+
+\begin{table}[!htbp]
+\centering
+\caption{Memory-only vs.\ DualGraph across four information-gathering domains.
+Same base LLM (Qwen-2.5-32B) and memory module; only the presence of the
+dual-graph controller differs. Mean $\pm$ s.d.\ over [N] cases per domain.
+$p$-values from Welch's $t$-test with Bonferroni correction.}
+\label{tab:memory_gap}
+\small
+\input{generated/tab_memory_gap.tex}
+\end{table}
+
+Across all four domains, DualGraph achieves [X--Y]\% higher entity acquisition
+than memory-only agents while maintaining comparable or higher information
+concordance (Table~\ref{tab:memory_gap}; Figure~1b). The memory-only agent
+terminates after a median of [A] turns across domains (range [B--C]), whereas
+DualGraph continues to a median of [D] turns (range [E--F]). Critically, the
+memory-only agent achieves \emph{higher} per-entity concordance on the small
+subset of entities it acquires---an artifact of selection bias: the agent
+cherry-picks easy, unambiguous entities and stops, never encountering the
+dependency-gated entities that DualGraph systematically pursues.
+
+This result is notable because the memory-only baseline already benefits from
+state-of-the-art memory management. Mem0's published benchmarks demonstrate
+that its memory layer substantially improves multi-session recall and
+response quality over na\"{\i}ve context-window approaches~\cite{mem0_2025}.
+Our finding is not that such memory systems fail at memory---they do
+not---but that memory excellence is orthogonal to task-completion excellence.
+The agent remembers what it was told; it does not know what it has not yet
+asked.
+
+\placeholder{%
+  \textbf{Statistical analysis.} Report effect sizes (Cohen's $d$) per
+  domain. Include 95\% bootstrap CIs for all metrics. Expected: large
+  effect sizes ($d > 1.0$) for acquisition; moderate ($d \approx 0.5$)
+  for concordance.
+}
+
+
+% ----------------------------------------------------------------------------
+\subsection{Dual-graph control closes the gap and outperforms existing agent
+frameworks}
+\label{sec:results_baselines}
+
+Having established the memory--completeness gap, we compare DualGraph against
+six baselines spanning the principal approaches to multi-step agent control:
+reasoning-and-acting (ReAct~\cite{yao2023react}), self-reflective correction
+(Reflexion~\cite{shinn2023reflexion}), upfront planning
+(Plan-and-Solve~\cite{wang2023plan}), tiered memory management
+(MemGPT~\cite{packer2023memgpt}), production-grade persistent memory
+(Mem0~\cite{mem0_2025}), and flat structured prompting (Checklist). All
+baselines share the same base LLM (Qwen-2.5-32B), system-prompt content
+(task description, entity descriptions), and patient/user simulators.
+
+\begin{table}[!htbp]
+\centering
+\caption{DualGraph vs.\ agent baselines across four domains.
+Entity acquisition rate (\%), information concordance (\%), and mean turns.
+Best in bold; second-best underlined. All DualGraph values use the
+static-graph variant; evolving-DAG results are reported separately in
+Section~\ref{sec:results_evolving}.}
+\label{tab:baselines}
+\small
+\input{generated/tab_baselines.tex}
+\end{table}
+
+\placeholder{%
+  \textbf{Figure 2: Baseline comparison.}\\
+  Panel (a): Grouped bar chart --- entity acquisition across domains and
+  methods, with 95\% bootstrap CIs.\\
+  Panel (b): Entity acquisition accumulation over turns for each method on
+  hypertension (learning curves). DualGraph shows steady, monotonic
+  accumulation; ReAct plateaus early; Plan-and-Solve shows front-loaded
+  gains then stalls on adaptive cases.\\
+  Panel (c): Failure-mode taxonomy --- stacked bar per method showing
+  fraction of cases failing by: premature termination, topic drift,
+  redundant re-asking, prerequisite violation. Premature termination
+  dominates for memory-based methods (MemGPT, Mem0); topic drift for
+  ReAct/Reflexion; rigidity failures for Plan-and-Solve.\\
+  Panel (d): Turn efficiency (acquisition per turn) vs.\ total acquisition.
+  DualGraph achieves highest total acquisition with competitive per-turn
+  efficiency. Checklist is efficient per turn on simple entities but stalls
+  on dependency-gated ones.
+}
+
+DualGraph achieves the highest entity acquisition across all four domains
+(Table~\ref{tab:baselines}). The pattern of baseline failures is
+architecturally predictable.
+ReAct and Reflexion achieve moderate acquisition (\placeholder{70--80\%}) but
+exhibit topic drift and redundant questioning: without a persistent task
+state external to the context window, these agents perform implicit global
+reasoning over the conversation history each turn, which is both
+computationally expensive and error-prone as context lengthens. Reflexion's
+periodic self-reflection partially mitigates drift but cannot substitute for
+the structural guarantees of graph-based traversal.
+Plan-and-Solve front-loads entity acquisition through an upfront plan but
+fails on adaptive cases where the user provides unexpected information
+requiring plan revision; its static plan lacks any local-update property,
+so any surprise forces global re-planning or, more commonly, plan
+abandonment.
+MemGPT and Mem0 show strong retention but premature-termination behavior
+comparable to the memory-only baseline, confirming that sophisticated memory
+management does not substitute for task-state control. This finding is
+particularly notable for Mem0, whose multi-level memory architecture
+(user, session, and agent state) with adaptive personalization represents
+the current state of the art in production memory
+systems~\cite{mem0_2025}.
+Checklist prompting is surprisingly competitive on domains with shallow
+prerequisite depth but degrades substantially when prerequisite chains are
+deep (\placeholder{Domain X, depth $L = Y$}), because it cannot reason about
+ordering.
+
+\placeholder{%
+  \textbf{Statistical comparisons.} Pairwise Welch's $t$-tests (DualGraph
+  vs.\ each baseline) per domain, Bonferroni-corrected. Effect sizes.
+  Report the number of domains in which DualGraph is significantly better
+  at $\alpha = 0.05$.
+}
+
+
+% ----------------------------------------------------------------------------
+\subsection{Evolving inference DAGs handle emergent information without
+pre-specification}
+\label{sec:results_evolving}
+
+The results above use static task graphs specified before dialogue onset.
+A fundamental limitation of any static-graph approach is the \emph{closed
+world assumption}: the entity set $V$ is fixed, so information that falls
+outside the predefined graph cannot be accommodated. In practice, users
+frequently reveal unanticipated information---a patient mentions a
+comorbidity not in the intake template, a claimant discloses a prior
+incident, a user describes an error message absent from the troubleshooting
+manual. Static DualGraph has no mechanism to integrate such information;
+it can only note it in memory and continue traversing the predefined graph.
+
+To address this, we implemented \emph{evolving inference DAGs}: during
+dialogue, when the extraction module detects information that does not map
+to any existing node in $V$, the system invokes an online graph-extension
+procedure that creates a new node $v_{\mathrm{new}}$, determines its
+prerequisite parents and association neighbors by embedding similarity and
+LLM-based dependency assessment, attaches it to the existing graph, and
+propagates the attachment through the NCS mechanism. Because NCS guarantees
+that only the local neighborhood of $v_{\mathrm{new}}$ requires
+re-evaluation, the ongoing traversal strategy for distant parts of the graph
+is undisturbed.
+
+\placeholder{%
+  \textbf{Figure 3: Evolving inference DAGs --- the centerpiece result.}\\
+  This is the figure reviewers will remember. Design carefully.\\[0.5em]
+  Panel (a): Walkthrough of a single representative case. Show the graph
+  at three time points: (i) initial static graph at turn 0; (ii) at turn
+  $t_1$, the patient reveals an unanticipated comorbidity --- a new node
+  appears, colored distinctly, with new prerequisite and association edges
+  drawn to existing nodes; the NCS update frontier $\mathcal{U}_{t_1}$ is
+  highlighted (small, local); (iii) at turn $t_2$, the agent has
+  incorporated the new entity into its traversal and resolved it. Contrast
+  with a static-graph agent that ignored the new information.\\
+  Panel (b): Entity acquisition rate on the \emph{emergent-entity subset}
+  (entities not in the original graph): DualGraph+Evolving vs.\ DualGraph
+  static vs.\ all baselines. Static methods should show $\sim$0\% on
+  emergent entities (they cannot represent them). Evolving DualGraph should
+  show [X]\%.\\
+  Panel (c): Entity acquisition on \emph{pre-specified entities}: show that
+  evolving-DAG mode does \emph{not} degrade performance on the original
+  entity set. This rules out the concern that dynamic graph growth
+  destabilizes existing traversal.\\
+  Panel (d): NCS locality validation for evolving DAGs. For each node
+  attachment event, plot the size of the actual update frontier
+  $|\mathcal{U}_t|$ vs.\ total graph size $|V^{(t)}|$. Expect
+  $|\mathcal{U}_t| \ll |V^{(t)}|$, confirming that NCS contains the
+  disruption of online graph growth.\\
+  Panel (e): Graph growth dynamics. Plot $|V^{(t)}|$ and $|E_P^{(t)}|$
+  over turns for representative cases across domains. Show that growth
+  is sparse and stabilizes (patients don't reveal unlimited new
+  information).
+}
+
+To evaluate this capability, we construct \emph{emergence test sets} for each
+domain: case profiles that contain [M] entities matching the predefined graph
+plus [K] additional entities (range [K$_{\min}$--K$_{\max}$] across domains)
+that are clinically/contextually relevant but absent from the original graph
+specification. These additional entities are designed by domain experts to be
+realistic surprises: uncommon comorbidities, atypical damage patterns,
+non-standard system configurations.
+
+\begin{table}[!htbp]
+\centering
+\caption{Performance on emergence test sets. ``Pre-specified Acq.'' measures
+acquisition of entities in the original graph $V$. ``Emergent Acq.'' measures
+acquisition of entities absent from $V$ but present in the ground-truth
+profile. Only DualGraph with evolving DAGs can represent and pursue emergent
+entities; all other methods can at best note them passively in memory.}
+\label{tab:evolving}
+\small
+\input{generated/tab_evolving.tex}
+\end{table}
+
+The key findings from Table~\ref{tab:evolving} and Figure~3 are threefold.
+First, DualGraph with evolving DAGs achieves [X]\% acquisition on emergent
+entities, compared to 0\% for static DualGraph and near-0\% for all
+baselines (which may passively record the information in memory or
+conversation history but do not systematically pursue it). Second,
+evolving-DAG mode preserves performance on pre-specified entities: the
+difference in pre-specified acquisition between static and evolving DualGraph
+is [Y]\% (not statistically significant at $\alpha = 0.05$), confirming that
+dynamic graph growth does not destabilize existing traversal. Third, the NCS
+locality prediction holds: the median update frontier size at node-attachment
+events is $|\mathcal{U}_t| = $ \placeholder{[value]} nodes, compared to a
+median graph size of $|V^{(t)}| = $ \placeholder{[value]} nodes at the time
+of attachment, a ratio of \placeholder{[Z]\%}.
+
+\placeholder{%
+  \textbf{Qualitative examples.} Include 2--3 dialogue excerpts showing:
+  (i) a patient mentions a previously unknown ACE-inhibitor allergy; the
+  evolving DAG creates an ``ACE-inhibitor allergy'' node, attaches
+  prerequisite edges from ``current medications'' and ``allergy history,''
+  attaches association edges to ``medication contraindications'' and
+  ``alternative antihypertensives,'' and the agent pivots to ask about
+  the severity and documented alternatives;
+  (ii) a static-graph agent receives the same information, stores it in
+  memory, but continues to the next pre-specified entity without follow-up;
+  (iii) a non-medical example (insurance or IT) showing the same pattern.
+}
+
+The evolving-DAG mechanism also improves \emph{robustness to incomplete graph
+specifications}. Even when the initial graph is constructed with an incomplete
+task specification, the evolving-DAG mode can ``fill in'' missing entities as
+they emerge during dialogue, partially compensating for specification gaps.
+We quantify this in Section~\ref{sec:results_graph_construction} by
+comparing evolving DualGraph against static DualGraph on deliberately
+incomplete graphs.
+
+
+% ----------------------------------------------------------------------------
+\subsection{Neighbor-conditioned stability explains when and why graph control
+helps}
+\label{sec:results_mechanism}
+
+The preceding subsections establish \emph{that} DualGraph works; this
+subsection addresses \emph{why}, through experiments designed around the
+NCS principle. Rather than a conventional component-removal ablation (which
+we report in full in Supplementary~\ref{app:ablation}), we focus on three
+mechanistic questions that NCS makes precise predictions about: locality
+validation, stability under perturbation, and scaling with graph complexity.
+
+\subsubsection{NCS locality holds empirically}
+\label{sec:results_ncs_locality}
+
+At each turn, DualGraph computes the update frontier $\mathcal{U}_t$ (the
+set of nodes whose combined neighborhoods intersect with the changed
+entities $\Delta_t$) and re-scores only those nodes. NCS predicts that
+scores outside $\mathcal{U}_t$ remain exactly unchanged. We verify this by
+running DualGraph in two modes: NCS mode (local re-scoring only) and
+global-recompute mode (all scores recomputed from scratch every turn), and
+comparing the resulting score vectors at each turn.
+
+\placeholder{%
+  \textbf{Figure 4: NCS mechanism.}\\
+  Panel (a): NCS locality validation. For each turn across all dialogues,
+  plot the set of nodes whose scores actually changed (global-recompute mode)
+  vs.\ the set predicted by the NCS update frontier. If NCS is correct,
+  these sets are identical. Report the fraction of turns where they match
+  exactly, and the size of any discrepancies.\\
+  Panel (b): Score oscillation analysis. For each entity, count the number
+  of ``sign changes'' in its score trajectory (score increases then
+  decreases or vice versa) per dialogue. Compare NCS mode vs.\
+  global-recompute mode. NCS predicts lower oscillation because scores
+  are shielded from irrelevant distant changes.\\
+  Panel (c): Computational cost. Plot per-turn score-update time (ms) vs.\
+  graph size $|V|$ for NCS mode and global-recompute mode. NCS should be
+  flat (depends on $\Delta_{\max}$, not $|V|$); global recompute should
+  be linear.\\
+  Panel (d): Performance scaling with graph complexity. Synthesize task
+  graphs of increasing size ($|V| \in \{10, 20, 40, 60, 80, 100\}$) and
+  density for the hypertension domain by sub-selecting or duplicating
+  entity clusters. Plot entity acquisition for DualGraph, Checklist, and
+  ReAct vs.\ $|V|$. DualGraph's advantage should grow with graph size
+  because richer local structure gives NCS more to exploit.\\
+  Panel (e): Performance under graph perturbation. For each perturbation
+  type (edge deletion, addition, reversal at 10/20/30/50\%), plot
+  acquisition degradation. NCS predicts \emph{local} degradation: deleting
+  an edge $(u,v)$ harms only $v$ and its downstream dependents, not the
+  full graph. Overlay the NCS-predicted ``damage radius'' (number of nodes
+  in $\mathcal{N}(v)$ and downstream) against the empirically observed
+  damage.
+}
+
+\begin{table}[!htbp]
+\centering
+\caption{NCS validation: locality, oscillation, and computational cost.
+Hypertension domain, [N] cases. ``Match rate'' is the fraction of turns
+where the NCS-predicted update set exactly equals the empirically changed
+score set.}
+\label{tab:ncs_validation}
+\small
+\input{generated/tab_ncs_validation.tex}
+\end{table}
+
+\placeholder{%
+  \textbf{Narrative.} Expected findings:
+  \begin{itemize}[noitemsep]
+    \item NCS prediction match rate $\geq$ 99\% (the few discrepancies
+          arise from the normalization denominator
+          $\max_{u \in \mathcal{F}} I(u)$ when frontier composition changes;
+          see Supplementary~\ref{app:ncs_proofs} for formal analysis).
+    \item Score oscillation is [X]\% lower with NCS. On high-complexity
+          graphs ($|V| > 50$), oscillation in global-recompute mode causes
+          the agent to switch target entities [Y] times per dialogue more
+          than NCS mode, reducing coherence ratings by [Z] points.
+    \item Per-turn score update is [A]$\times$ faster with NCS for
+          $|V| = 60$ graphs. The gap widens with graph size.
+    \item Acquisition and concordance are statistically indistinguishable
+          between modes, confirming that NCS is a computational and stability
+          optimization, not an approximation.
+  \end{itemize}
+}
+
+\subsubsection{Key component ablations}
+\label{sec:results_ablation_summary}
+
+We summarize the most informative component ablations here; the full
+fourteen-condition ablation table is in Supplementary~\ref{app:ablation}.
+
+\begin{table}[!htbp]
+\centering
+\caption{Key ablations on hypertension domain ([N] cases). Full DualGraph
+in the first row; each subsequent row removes one component. $\Delta$Acq.\
+is the change in acquisition relative to full DualGraph.}
+\label{tab:ablation_summary}
+\small
+\input{generated/tab_ablation.tex}
+\end{table}
+
+Removing the prerequisite graph causes the largest acquisition drop
+(\placeholder{$-$X\%}): without ordering constraints, the agent asks
+dependency-gated questions prematurely, receives uninformative responses,
+and wastes turns. Removing the association graph produces a smaller but
+significant drop (\placeholder{$-$Y\%}) concentrated in coherence ratings
+rather than raw acquisition: the agent collects information but via jarring
+topic jumps that reduce oracle cooperation (quantified as a [Z]\% increase
+in non-responses and evasive answers). Removing confidence gating has minimal
+effect on acquisition but degrades concordance by \placeholder{$-$W\%},
+confirming that gating serves accuracy rather than coverage. Removing
+long-term memory degrades performance on long dialogues ($>$20 turns) where
+context-window overflow causes the LLM to lose track of previously acquired
+information. Disabling the evolving-DAG mechanism has no effect on standard
+test sets (which contain no emergent entities) but causes the full
+degradation reported in Section~\ref{sec:results_evolving} on emergence test
+sets.
+
+
+% ----------------------------------------------------------------------------
+\subsection{Task graphs can be constructed automatically with local expert
+correction}
+\label{sec:results_graph_construction}
+
+A critical requirement for DualGraph's practical utility is that task graphs
+can be constructed without prohibitive expert effort. We evaluate a
+semi-automatic pipeline (detailed in Methods
+Section~\ref{sec:graph_construction}) that extracts entity graphs from
+textual task specifications and validate the output against expert-designed
+ground-truth graphs.
+
+\begin{table}[!htbp]
+\centering
+\caption{Semi-automatic graph construction: agreement with expert-designed
+ground truth and downstream task performance. ``Auto'' uses the LLM-generated
+graph without expert correction. ``Expert'' uses the manually designed graph.
+``Auto+Review'' uses the auto-generated graph after expert review (mean review
+time in rightmost column).}
+\label{tab:graph_construction}
+\small
+\input{generated/tab_graph_construction.tex}
+\end{table}
+
+\placeholder{%
+  \textbf{Figure 5: Graph construction validation.}\\
+  Panel (a): Pipeline schematic (task specification $\to$ LLM entity
+  extraction $\to$ LLM prerequisite identification $\to$ embedding-based
+  association graph $\to$ expert review).\\
+  Panel (b): Edge-level agreement (precision, recall, F1) for prerequisite
+  and association edges across domains.\\
+  Panel (c): Downstream acquisition using auto vs.\ auto+review vs.\ expert
+  graphs (grouped bars). Key result: auto+review $\approx$ expert.\\
+  Panel (d): NCS-predicted locality of expert corrections. For each
+  corrected edge, compute the NCS neighborhood of the affected node(s)
+  and measure whether downstream performance changes are confined to that
+  neighborhood (they should be, confirming that corrections can be made
+  independently).
+}
+
+Two findings are particularly relevant to the NCS framework. First,
+the downstream performance gap between auto-generated and expert-designed
+graphs is \placeholder{[X]\%} without review and \placeholder{[Y]\%} after
+expert review (mean review time: \placeholder{[Z]} minutes per domain). The
+robustness to moderate graph imperfections is a direct consequence of NCS
+locality: a single erroneous edge affects only the local neighborhood, not
+the global traversal strategy. Second, the evolving-DAG mechanism partially
+compensates for auto-generation errors: on deliberately incomplete
+auto-generated graphs (with [K]\% of entities missing), evolving DualGraph
+recovers \placeholder{[W]\%} of the missing entities through online
+discovery during dialogue, compared to 0\% for static DualGraph.
+
+
+% ----------------------------------------------------------------------------
+\subsection{Improved information gathering translates to improved downstream
+decisions}
+\label{sec:results_downstream}
+
+The preceding subsections demonstrate that DualGraph improves upstream
+information acquisition. This subsection addresses the downstream question:
+does acquiring more and better-structured information actually lead to better
+task outcomes?
+
+\subsubsection{Automated downstream evaluation}
+
+\begin{table}[!htbp]
+\centering
+\caption{Downstream task performance across domains. Clinical domains:
+diagnosis accuracy, risk stratification accuracy, medication rationality
+(1--5), follow-up protocol score (1--5). Non-medical domains:
+domain-specific decision metrics. DualGraph (evolving) uses the
+evolving-DAG variant. [N] cases per domain.}
+\label{tab:downstream}
+\small
+\input{generated/tab_downstream.tex}
+\end{table}
+
+The pattern is consistent: DualGraph's upstream acquisition advantage
+translates proportionally into downstream decision quality. Hypertension
+classification accuracy improves from [54--56]\% (memory-only) to 72\%
+(static DualGraph) and \placeholder{[X]\%} (evolving DualGraph).
+Risk stratification---which depends on multiple interacting entities
+(blood pressure grade, organ damage markers, cardiovascular risk
+factors)---shows the largest improvement, from [39.5--40]\% to 62.5\%,
+because DualGraph's prerequisite graph ensures that all risk-factor
+entities are acquired before stratification is attempted. Medication
+rationality, which is already high across conditions (physicians' prescribing
+knowledge is partially embedded in the base LLM), shows a smaller but
+clinically meaningful improvement from [3.98--4.13]/5 to 4.78/5.
+
+\placeholder{%
+  \textbf{Causal analysis.} For the hypertension domain (200 cases),
+  identify cases where DualGraph improved downstream classification
+  relative to memory-only and trace the improvement to specific entities
+  that DualGraph acquired and memory-only missed. E.g., ``In 34 cases,
+  DualGraph acquired organ damage markers (serum creatinine, urinary
+  albumin) that memory-only missed; in 28 of these, the markers changed
+  the risk stratum.'' This establishes the causal chain: graph control
+  $\to$ entity acquisition $\to$ downstream accuracy.
+}
+
+\subsubsection{Prospective clinician-supervised pilot}
+\label{sec:pilot}
+
+\placeholder{%
+  \textbf{Pilot study design and results.}\\
+  \begin{itemize}[noitemsep]
+    \item $N = $ [30--50] consented patients, hypertension clinic
+    \item Clinician-in-the-loop: real-time observation, intervention
+          capability
+    \item Metrics: entity acquisition vs.\ clinician's own notes,
+          concordance, clinician trust (1--5 Likert), time-to-complete,
+          clinician interventions, safety flag activations
+    \item IRB: [number]
+  \end{itemize}
+
+  \textbf{Results:}
+  \begin{itemize}[noitemsep]
+    \item Entity acquisition: [X]\% (DualGraph) vs.\ [Y]\% (clinician
+          standard intake); note that clinician ``acquisition'' reflects
+          what they documented, which may undercount what they actually
+          elicited.
+    \item Concordance with clinician assessment: [X]\%
+    \item Clinician trust: mean [Y]/5 (range [A--B])
+    \item Clinician interventions: mean [Z] per case (range [A--B]);
+          most common reason: [describe]
+    \item Safety: [N] safety flags activated; [M] true positives,
+          [K] false positives; no adverse events attributable to the system
+    \item Evolving DAG activations in pilot: in [P]\% of cases, the patient
+          revealed information not in the predefined graph; the evolving
+          DAG mechanism successfully integrated [Q]\% of these
+  \end{itemize}
+  Detailed protocol and per-case results in Supplementary~\ref{app:pilot}.
+}
+% ============================================================================
+% 3. THEORETICAL ANALYSIS
+% ============================================================================
+\section{Theoretical Analysis}
+\label{sec:theory}
+
+We now formalize the DualGraph framework, introduce the neighbor-conditioned
+stability principle, and derive convergence guarantees. The theoretical
+contribution serves two purposes: it explains \emph{why} graph-based task
+control works (through the locality of information dependencies) and provides
+\emph{when} guarantees (convergence bounds as a function of graph structure).
+
+% ----------------------------------------------------------------------------
+\subsection{Problem formulation: constrained coverage on dual graphs}
+\label{sec:theory_formulation}
+
+\begin{definition}[Structured Information-Gathering Problem]
+\label{def:sig}
+A \emph{structured information-gathering problem} is a tuple
+$\mathcal{T} = (V, E_P, E_A, w, \mathcal{O})$ where:
+\begin{itemize}[noitemsep]
+  \item $V = \{v_1, \ldots, v_n\}$ is a set of required information entities;
+  \item $E_P \subseteq V \times V$ defines prerequisite constraints
+        (if $(u, v) \in E_P$, then $u$ must be resolved before $v$);
+        $G_P = (V, E_P)$ must be a directed acyclic graph (DAG);
+  \item $E_A \subseteq \binom{V}{2}$ defines semantic association
+        (undirected, weighted); $G_A = (V, E_A, w_A)$ with
+        $w_A: E_A \to (0, 1]$;
+  \item $w: V \to \mathbb{R}_{>0}$ assigns importance weights;
+  \item $\mathcal{O}$ is an oracle (e.g., a patient) that, when queried about
+        entity $v$ whose prerequisites are satisfied, returns a noisy
+        observation $o_v$ with probability $p_v \in (0, 1]$ of being
+        informative.
+\end{itemize}
+The goal is to resolve all entities (or achieve coverage $\geq 1 - \epsilon$)
+in the minimum number of queries while respecting prerequisite constraints and
+maintaining conversational coherence.
+\end{definition}
+
+\begin{definition}[Entity State and Entropy]
+\label{def:entropy}
+Each entity $v \in V$ maintains a belief distribution $\mathbf{b}_v =
+(b_{v,1}, \ldots, b_{v,K})$ over $K$ candidate states (including an
+``unknown'' state). The uncertainty of $v$ is quantified by Shannon entropy:
+\[
+  H(v) = -\sum_{k=1}^{K} b_{v,k} \log_2 b_{v,k}.
+\]
+An entity is \emph{resolved} when $H(v) \leq \delta$ for a resolution
+threshold $\delta \geq 0$. The \emph{importance} of unresolved entity $v$ is:
+\[
+  I(v) = w(v) \cdot H(v).
+\]
+\end{definition}
+
+\begin{definition}[Coverage Function]
+\label{def:coverage}
+For a set of resolved entities $S \subseteq V$, the weighted coverage is:
+\[
+  C(S) = \frac{\sum_{v \in S} w(v)}{\sum_{v \in V} w(v)}.
+\]
+\end{definition}
+
+\begin{definition}[Frontier]
+\label{def:frontier}
+The \emph{frontier} at time $t$ is the set of entities whose prerequisites are
+all resolved but which are themselves unresolved:
+\[
+  \mathcal{F}^{(t)} = \bigl\{v \in V \setminus S^{(t)} :
+    \forall u \text{ s.t.\ } (u, v) \in E_P, \; u \in S^{(t)} \bigr\},
+\]
+where $S^{(t)}$ is the set of resolved entities at time $t$. Only frontier
+entities are eligible for querying.
+\end{definition}
+
+% ----------------------------------------------------------------------------
+\subsection{Neighbor-conditioned stability}
+\label{sec:theory_ncs}
+
+We now introduce the central theoretical concept that distinguishes
+DualGraph from flat or ad-hoc task representations. The key observation
+is that real information-gathering tasks exhibit \emph{local dependency
+structure}: the importance of querying a particular entity depends not on
+the global state of all entities but only on the states of a small set
+of logically or semantically related entities---its graph neighbors.
+
+\begin{definition}[Neighborhood and Neighbor-Conditioned Stability]
+\label{def:ncs}
+For a node $v \in V$, define its \emph{combined neighborhood} as the union
+of its prerequisite parents and association neighbors:
+\[
+  \mathcal{N}(v) = \bigl\{u \in V : (u, v) \in E_P\bigr\}
+    \cup \bigl\{u \in V : \{u, v\} \in E_A\bigr\}.
+\]
+A scoring function $\sigma: V \times 2^V \to \mathbb{R}$ satisfies
+\emph{neighbor-conditioned stability} (NCS) if for all $v \in V$ and
+all time steps $t, t'$:
+\[
+  \bigl[\forall u \in \mathcal{N}(v): \mathbf{b}_u^{(t')} =
+    \mathbf{b}_u^{(t)}\bigr]
+  \implies
+  \sigma(v, S^{(t')}) = \sigma(v, S^{(t)}).
+\]
+That is, if the belief states of all neighbors of $v$ are unchanged between
+turns $t$ and $t'$, then the score of $v$ is also unchanged, regardless of
+changes to distant nodes.
+\end{definition}
+
+\begin{proposition}[DualGraph Scoring Satisfies NCS]
+\label{prop:ncs_holds}
+The DualGraph scoring function
+\[
+  \mathrm{Score}(v) = \alpha \cdot \tilde{I}(v)
+    + \beta \cdot T(v) + \gamma \cdot C(v)
+\]
+satisfies neighbor-conditioned stability under the following conditions:
+(i) the importance term $\tilde{I}(v)$ depends on $v$'s belief and the
+beliefs of its prerequisite parents (which determine frontier membership);
+(ii) the centrality term $T(v)$ is precomputed from the static graph
+topology and does not change during dialogue; (iii) the community continuity
+term $C(v)$ depends only on the previously queried node $v_{\mathrm{prev}}$,
+which is a global quantity but changes at most once per turn and affects all
+nodes equally.
+\end{proposition}
+
+\begin{proof}
+Consider the three terms independently. The normalized importance
+$\tilde{I}(v) = I(v) / \max_{u \in \mathcal{F}} I(u)$ depends on $v$'s own
+entropy $H(v)$ (which changes only when $v$ is directly queried) and on
+frontier membership (which changes only when a prerequisite parent of $v$
+transitions from unresolved to resolved). Both conditions involve
+$\mathcal{N}(v)$. The PageRank centrality $T(v)$ is a function of the static
+graph topology $G_A$ and is invariant across turns. The community continuity
+$C(v) = \mathbf{1}[\mathrm{comm}(v) = \mathrm{comm}(v_{\mathrm{prev}})]$
+depends on $v$'s community assignment (static) and on $v_{\mathrm{prev}}$,
+which is a global parameter. Conditioning on $v_{\mathrm{prev}}$ being fixed
+within a turn, $C(v)$ is also locally determined. Therefore,
+$\mathrm{Score}(v)$ changes only when (a) $v$'s own belief changes,
+(b) a prerequisite parent's belief changes (affecting frontier status), or
+(c) an association neighbor's belief changes (affecting the normalization
+denominator if the neighbor is also in the frontier). All three conditions
+involve nodes in $\mathcal{N}(v)$.
+\end{proof}
+
+\begin{remark}[Connection to Dynamic Programming]
+\label{rem:dp}
+The NCS property is structurally analogous to the \emph{principle of
+optimality} in dynamic programming~\cite{bellman1957dynamic}. In the Bellman
+equation, the optimal value of a state depends only on the values of its
+successor states, not on the entire state space. This locality enables
+efficient value iteration: only states whose successors have changed need
+recomputation. In DualGraph, the optimal next-query decision depends only
+on the states of graph-local neighbors, enabling efficient priority updates
+that propagate only through the graph's edge structure rather than requiring
+global recomputation at every turn.
+
+This connection runs deeper than mere analogy. Consider the dual graphs
+as defining a state-transition structure over entity configurations. At each
+turn, the agent transitions from one configuration (set of resolved entities)
+to another by resolving one additional entity. The ``value'' of each
+configuration is the expected future cost (remaining turns) to achieve full
+coverage. The NCS property ensures that this value function decomposes
+locally over the graph, enabling a greedy policy that approximates the
+optimal policy within the bounds established by submodularity
+(Theorem~\ref{thm:convergence}).
+
+More precisely, let $\mathcal{S} = 2^V$ be the space of entity
+configurations (resolved subsets). For a given configuration $S$, the
+Bellman equation for the minimum expected queries to coverage
+$\geq 1 - \epsilon$ is:
+\[
+  Q^*(S) = \begin{cases}
+    0 & \text{if } C(S) \geq 1 - \epsilon, \\
+    1 + \min_{v \in \mathcal{F}(S)} \bigl[p_v \cdot Q^*(S \cup \{v\})
+      + (1 - p_v) \cdot Q^*(S)\bigr] & \text{otherwise.}
+  \end{cases}
+\]
+The NCS property implies that for any two configurations $S, S'$ that differ
+only in entities \emph{outside} $\mathcal{N}(v)$, the marginal value of
+querying $v$ is identical:
+\[
+  Q^*(S) - Q^*(S \cup \{v\}) = Q^*(S') - Q^*(S' \cup \{v\}),
+\]
+provided $\mathcal{F}(S) \cap \mathcal{N}(v) = \mathcal{F}(S') \cap
+\mathcal{N}(v)$. This is precisely the condition under which the greedy
+policy (always query the highest-score frontier entity) achieves near-optimal
+performance, because the submodularity of $C$ ensures that greedy marginal
+gains are good proxies for global optimality.
+\end{remark}
+
+The practical consequence of NCS is threefold. First, \emph{computational
+efficiency}: at each turn, only the $O(\Delta)$ neighbors of the most
+recently updated entity (where $\Delta = \max_v |\mathcal{N}(v)|$) require
+score recomputation, rather than all $|V|$ entities. For typical task graphs
+where $\Delta \ll |V|$, this is a substantial reduction. Second,
+\emph{consistency}: because scores are updated only in response to actual
+neighbor state changes, the system cannot enter oscillatory states where an
+entity's priority flickers due to irrelevant distant changes. Third,
+\emph{interpretability}: the locality of updates means that any change in
+agent behavior (e.g., switching from one topic to another) can be traced to a
+specific neighboring entity's state change, providing an auditable explanation.
+
+\begin{proposition}[Local Update Sufficiency]
+\label{prop:local_update}
+Under the DualGraph scoring function (Eq.~\ref{eq:score}), the optimal
+next-entity selection at turn $t+1$ depends only on the set of nodes whose
+combined neighborhoods intersect with the set of entities updated at turn $t$.
+Formally, let $\Delta_t \subseteq V$ be the set of entities whose belief
+distributions changed at turn $t$. Define the \emph{update frontier}:
+\[
+  \mathcal{U}_t = \bigl\{v \in V : \mathcal{N}(v) \cap \Delta_t
+    \neq \emptyset\bigr\} \cup \Delta_t.
+\]
+Then $\mathrm{Score}^{(t+1)}(v) = \mathrm{Score}^{(t)}(v)$ for all
+$v \notin \mathcal{U}_t$.
+\end{proposition}
+
+\begin{proof}
+Follows directly from Definition~\ref{def:ncs} and
+Proposition~\ref{prop:ncs_holds}. For $v \notin \mathcal{U}_t$, no node in
+$\mathcal{N}(v)$ has changed belief state (since
+$\mathcal{N}(v) \cap \Delta_t = \emptyset$ and $v \notin \Delta_t$),
+so $\mathrm{Score}(v)$ is unchanged by NCS.
+\end{proof}
+
+% ----------------------------------------------------------------------------
+\subsection{Submodularity and convergence guarantees}
+\label{sec:theory_convergence}
+
+\begin{proposition}[Submodularity of Weighted Coverage]
+\label{prop:submodular}
+The weighted coverage function $C: 2^V \to [0,1]$ is monotone submodular.
+\end{proposition}
+
+\begin{proof}
+Monotonicity is immediate: for $S \subseteq T$, $C(S) \leq C(T)$ since
+adding resolved entities can only increase the weighted sum in the numerator.
+For submodularity, consider $A \subseteq B \subseteq V$ and $v \notin B$. Then
+\[
+  C(A \cup \{v\}) - C(A) = \frac{w(v)}{W} = C(B \cup \{v\}) - C(B),
+\]
+where $W = \sum_{u \in V} w(u)$. The marginal gain is constant (does not
+decrease), so $C$ is in fact modular. However, in the
+prerequisite-constrained setting, the coverage function is defined only over
+feasible sets (those respecting topological order in $G_P$). The restriction
+of a modular function to a matroid constraint yields a submodular optimization
+problem over a matroid~\cite{calinescu2011, vondrak2008}, for which the greedy
+algorithm achieves a $(1 - 1/e)$-approximation.
+\end{proof}
+
+\begin{theorem}[Convergence Bound for DualGraph Greedy Policy]
+\label{thm:convergence}
+Let $G_P = (V, E_P)$ be a DAG with longest path length $L$ and let
+$\Delta_{\max} = \max_v |\mathcal{N}(v)|$ be the maximum combined
+neighborhood size. Assume each query resolves entity $v$ with probability
+$p_{\min} > 0$. Then DualGraph's greedy policy achieves
+$C(S) \geq 1 - \epsilon$ in at most
+\[
+  T \leq \frac{|V|}{p_{\min}} \left(1 +
+    \frac{\ln(1/\epsilon)}{\ln\bigl(1/(1 - p_{\min})\bigr)}\right)
+\]
+queries in expectation, respecting all prerequisite constraints. Furthermore,
+the per-turn computational cost of the NCS-based score update is
+$O(\Delta_{\max})$, yielding a total computational cost of
+$O(T \cdot \Delta_{\max})$ for the complete dialogue.
+\end{theorem}
+
+\begin{proof}
+\placeholder{%
+  \textbf{Proof sketch (full proof in Supplementary~\ref{app:proof}):}
+  \begin{enumerate}[noitemsep]
+    \item The prerequisite graph $G_P$ is a DAG; topological layers
+          $L_0, L_1, \ldots, L_d$ (where $d \leq L$) partition $V$ such
+          that all prerequisites of entities in $L_i$ lie in $L_0 \cup
+          \cdots \cup L_{i-1}$.
+    \item At any time $t$, the frontier $\mathcal{F}^{(t)}$ contains only
+          entities whose layer predecessors are all resolved. The greedy
+          policy queries the highest-importance frontier entity.
+    \item Each query resolves the target entity with probability
+          $\geq p_{\min}$; after $k$ attempts, resolution probability is
+          $1 - (1 - p_{\min})^k \geq 1 - e^{-k p_{\min}}$.
+    \item Setting $k^* = \lceil \ln(|V|/\epsilon) / p_{\min} \rceil$ ensures
+          that each entity is resolved with probability $\geq 1 - \epsilon / |V|$.
+    \item By a union bound over $|V|$ entities and summing over at most
+          $L + 1$ layers, the total expected queries is bounded by
+          $|V| \cdot k^*$, yielding the stated bound.
+    \item The $(1 - 1/e)$ submodularity guarantee applies to the
+          importance-weighted ordering within each topological layer.
+    \item The NCS property ensures that only $O(\Delta_{\max})$ scores are
+          recomputed per turn (Proposition~\ref{prop:local_update}).
+  \end{enumerate}
+}
+\end{proof}
+
+\begin{corollary}[When Dual-Graph Outperforms Single-Graph and Flat Methods]
+\label{cor:when}
+The performance advantage of DualGraph over alternative control structures
+can be characterized as follows.
+
+\noindent\textbf{(a) Over prerequisite-only control.} Let $\phi \in [0, 1]$
+denote the \emph{oracle cooperation probability}, modeled as a decreasing
+function of topic incoherence: $\phi = g(\mathrm{coherence})$ where coherence
+is measured by community continuity in $G_A$. Without the association graph,
+topic transitions are unconstrained, yielding lower $\phi$ and thus lower
+effective $p_v$. The convergence bound of Theorem~\ref{thm:convergence}
+depends on $p_{\min}$; reducing $p_{\min}$ by a factor of $\phi < 1$
+increases the query bound by a factor of $1/\phi$.
+
+\noindent\textbf{(b) Over association-only control.} Without prerequisite
+constraints, the agent may query entities whose prerequisites are unresolved,
+yielding uninformative responses ($p_v \approx 0$ for such queries). The
+expected number of wasted queries is proportional to the number of
+prerequisite-violating selections, which scales with the depth $L$ of the
+prerequisite DAG.
+
+\noindent\textbf{(c) Over flat checklists.} A checklist provides no ordering
+and no coherence structure. It is equivalent to a DualGraph with
+$E_P = E_A = \emptyset$, yielding $\Delta_{\max} = 0$ and no locality to
+exploit. Both prerequisite violations and incoherence penalties apply,
+compounding into a query bound that is $O(L / \phi)$ times worse than
+DualGraph in the worst case.
+
+\placeholder{%
+  Formalize the oracle cooperation model $\phi = g(\cdot)$.
+  Provide empirical calibration of $\phi$ from simulation data.
+  Plot theoretical bound vs.\ empirical convergence for each condition.
+}
+\end{corollary}
+
+% ----------------------------------------------------------------------------
+\subsection{Complexity analysis}
+\label{sec:theory_complexity}
+
+The per-turn computational overhead of DualGraph beyond base LLM inference
+consists of four components. Score recomputation under NCS costs
+$O(\Delta_{\max})$ per turn, where $\Delta_{\max}$ is the maximum combined
+neighborhood size. Community detection via the Leiden
+algorithm~\cite{traag2019leiden} costs $O(|E_A|)$ and is executed once at
+initialization and only re-run if the graph topology changes (which it does
+not in the current static-graph formulation). Memory retrieval using
+approximate nearest-neighbor indexing (HNSW) costs $O(d \log |M|)$ per
+query, where $|M|$ is the memory store size and $d$ is the embedding
+dimension. Entity extraction from the user response requires one additional
+LLM call (or a lightweight NER model), costing $O(1)$ relative to the main
+dialogue LLM call. For typical task graphs with $|V| \leq 100$ entities and
+$\Delta_{\max} \leq 15$, the total per-turn overhead is negligible compared
+to LLM inference latency.
+
+\placeholder{%
+  \textbf{Table: Per-turn latency breakdown (milliseconds).}\\
+  \begin{tabular}{lrr}
+    Component & DualGraph & Global recompute (no NCS) \\
+    Score update & [X] ms & [Y] ms \\
+    Memory retrieval & [X] ms & [X] ms \\
+    Entity extraction & [X] ms & [X] ms \\
+    LLM inference & [X] ms & [X] ms \\
+    Total & [X] ms & [X] ms \\
+  \end{tabular}
+}
+
+
+
+% ----------------------------------------------------------------------------
+\subsection{Evolving inference DAGs: online graph extension under NCS}
+\label{sec:theory_evolving}
+
+We now formalize the extension from static task graphs to dynamically evolving
+inference DAGs that grow during dialogue as new information entities are
+discovered.
+
+\begin{definition}[Evolving Inference DAG]
+\label{def:evolving}
+An \emph{evolving inference DAG} is a time-indexed sequence of structured
+information-gathering problems $\mathcal{T}^{(t)} = (V^{(t)}, E_P^{(t)},
+E_A^{(t)}, w^{(t)}, \mathcal{O})$ where:
+\begin{itemize}[noitemsep]
+  \item $V^{(0)} \subseteq V^{(1)} \subseteq \cdots$ (the node set can
+        only grow);
+  \item At each turn $t$, at most one new node $v_{\mathrm{new}}$ may be
+        added: $V^{(t+1)} = V^{(t)} \cup \{v_{\mathrm{new}}\}$;
+  \item New prerequisite edges $(u, v_{\mathrm{new}})$ and
+        $(v_{\mathrm{new}}, u)$ are added subject to the constraint that
+        $G_P^{(t+1)}$ remains a DAG;
+  \item New association edges $\{u, v_{\mathrm{new}}\}$ are added based on
+        embedding similarity exceeding threshold $\theta$;
+  \item $w^{(t+1)}(v_{\mathrm{new}})$ is assigned by the importance
+        estimation module (LLM-based or rule-based).
+\end{itemize}
+The coverage function generalizes to the time-varying node set:
+$C^{(t)}(S) = \sum_{v \in S \cap V^{(t)}} w^{(t)}(v) \big/
+\sum_{v \in V^{(t)}} w^{(t)}(v)$.
+\end{definition}
+
+\begin{proposition}[NCS Containment for Online Node Attachment]
+\label{prop:evolving_ncs}
+When a new node $v_{\mathrm{new}}$ is attached to the graph at turn $t+1$,
+the set of existing nodes whose scores may change is contained within:
+\[
+  \mathcal{U}_{t+1}^{\mathrm{attach}} = \mathcal{N}(v_{\mathrm{new}})
+    \cup \bigl\{u \in V^{(t)} : v_{\mathrm{new}} \in \mathcal{N}(u)
+    \text{ in } G^{(t+1)}\bigr\}.
+\]
+That is, only the direct neighbors of the new node in the updated graph
+require score recomputation. All nodes $v$ with
+$\mathcal{N}^{(t+1)}(v) \cap \{v_{\mathrm{new}}\} = \emptyset$ retain
+their scores from turn $t$.
+\end{proposition}
+
+\begin{proof}
+The NCS property (Definition~\ref{def:ncs}) states that
+$\mathrm{Score}(v)$ is unchanged when no neighbor's belief state has
+changed. Adding $v_{\mathrm{new}}$ introduces a new neighbor only for
+nodes directly connected to $v_{\mathrm{new}}$ by a prerequisite or
+association edge in $G^{(t+1)}$. For all other nodes, the neighborhood
+$\mathcal{N}^{(t+1)}(v) = \mathcal{N}^{(t)}(v)$ and no belief states
+within that neighborhood have changed. The PageRank centrality $T(v)$ is
+recomputed only if the topology change affects $v$'s subgraph; for nodes
+far from $v_{\mathrm{new}}$, the change in PageRank is negligible and can
+be bounded by the mixing-time analysis of personalized
+PageRank~\cite{page1999pagerank}. Community assignments may change if
+$v_{\mathrm{new}}$ bridges two communities; we handle this by running
+incremental community detection only on the affected community and its
+neighbors.
+\end{proof}
+
+\begin{theorem}[Convergence of Evolving DualGraph]
+\label{thm:evolving_convergence}
+Let $V^{(\infty)} = \bigcup_{t \geq 0} V^{(t)}$ be the final node set
+(which is finite since the dialogue has finite length and each turn adds at
+most one node). Assume $|V^{(\infty)}| \leq N_{\max}$. Then the convergence
+bound of Theorem~\ref{thm:convergence} applies with $|V|$ replaced by
+$N_{\max}$, and the per-turn computational cost remains
+$O(\Delta_{\max}^{(\infty)})$ where $\Delta_{\max}^{(\infty)}$ is the
+maximum neighborhood size in the final graph.
+\end{theorem}
+
+\begin{proof}[Proof sketch]
+The evolving DAG only adds nodes and edges, never removes them. At any
+turn $t$, the subgraph over $V^{(t)}$ is a valid structured
+information-gathering problem satisfying all requirements of
+Definition~\ref{def:sig} (since DAG-ness is maintained by construction).
+Theorem~\ref{thm:convergence} applies to this subgraph. Because
+$V^{(t)} \subseteq V^{(\infty)}$ and the bound is monotone in $|V|$,
+the worst-case bound uses $N_{\max}$. NCS containment
+(Proposition~\ref{prop:evolving_ncs}) ensures that per-turn cost does not
+exceed $O(\Delta_{\max}^{(\infty)})$ regardless of when nodes are added.
+\end{proof}
+
+\begin{remark}[DAG Maintenance Under Online Growth]
+\label{rem:dag_maintenance}
+A critical implementation constraint is that prerequisite edges involving
+$v_{\mathrm{new}}$ must not introduce cycles into $G_P$. When the online
+graph-extension module proposes a prerequisite edge
+$(v_{\mathrm{new}}, u)$ for some existing node $u$, the system verifies
+that $u$ is not an ancestor of $v_{\mathrm{new}}$ in the current $G_P$.
+This check costs $O(|V^{(t)}|)$ in the worst case (a single DFS from $u$)
+but is fast in practice because the prerequisite graph is sparse. If the
+proposed edge would create a cycle, it is rejected and the LLM-based
+dependency assessor is re-queried with the constraint made explicit.
+\end{remark}
+
+
+\subsubsection{Evolving inference DAG implementation}
+\label{sec:methods_evolving}
+
+The evolving-DAG mechanism operates through a three-stage pipeline triggered
+whenever the entity extraction module detects information that does not map
+to any existing node in $V^{(t)}$ with embedding cosine similarity above a
+matching threshold $\theta_{\mathrm{match}}$ (default 0.85).
+
+\paragraph{Stage 1: Entity emergence detection.}
+After each user response, the extraction module produces a set of candidate
+entity--value pairs. Each candidate entity description is embedded and
+compared (cosine similarity) against all existing node descriptions in
+$V^{(t)}$. If the maximum similarity falls below $\theta_{\mathrm{match}}$,
+the entity is flagged as potentially emergent. To reduce false positives,
+the candidate is then assessed by a lightweight LLM call: ``Does the
+following information represent a new clinical/task-relevant entity not
+covered by any of the following existing entities? [list of top-5 most
+similar existing entities]''. Only candidates confirmed by both the
+embedding filter and the LLM check proceed to Stage 2.
+
+\paragraph{Stage 2: Graph attachment.}
+For a confirmed emergent entity $v_{\mathrm{new}}$, the system constructs
+its local graph connections. Prerequisite edges are determined by prompting
+the LLM: for each existing node $u$ in the top-$k$ most similar nodes
+(default $k = 10$), the system asks ``Must $u$ be resolved before
+$v_{\mathrm{new}}$ can be meaningfully queried?'' and vice versa. Edges
+with positive responses are added subject to DAG verification (a DFS-based
+cycle check). Association edges are added for all existing nodes with
+embedding similarity above $\theta$ (same threshold as initial graph
+construction). The importance weight $w(v_{\mathrm{new}})$ is estimated
+by the LLM on a 1--5 scale, consistent with the initial graph construction
+pipeline.
+
+\paragraph{Stage 3: NCS-contained propagation.}
+Once $v_{\mathrm{new}}$ and its edges are committed to the graph, the
+NCS dirty-flag mechanism is invoked: dirty flags are set for all nodes in
+$\mathcal{N}(v_{\mathrm{new}})$ (the combined neighborhood in the updated
+graph). Community detection is run incrementally: only the community
+containing $v_{\mathrm{new}}$'s closest association neighbor is
+re-evaluated, using the Leiden algorithm seeded with the current partition.
+PageRank is updated via a rank-one perturbation approximation rather than
+full recomputation. All other graph regions remain untouched.
+
+The entire pipeline executes within a single dialogue turn. The
+computational overhead beyond the standard DualGraph per-turn cost is one
+additional LLM call (emergence verification), $k$ LLM calls (prerequisite
+assessment), and $O(|V^{(t)}|)$ embedding comparisons for association
+edges. For typical emergence rates (fewer than [X] new entities per
+dialogue) and graph sizes ($|V| \leq 100$), this adds \placeholder{[Y] ms}
+per emergence event.
+
+\placeholder{%
+  \textbf{Failure modes and safeguards:}
+  \begin{itemize}[noitemsep]
+    \item \textbf{False-positive emergence}: a previously existing entity
+          is misidentified as new, creating a duplicate node. Safeguard:
+          after graph attachment, a post-hoc deduplication check compares
+          the new node's resolved value against all existing nodes; if a
+          match is found, the nodes are merged.
+    \item \textbf{False-negative emergence}: a genuinely new entity is
+          matched to an existing node. Safeguard: if the existing node's
+          belief distribution becomes bimodal after the new information
+          is integrated (entropy increases above $\delta$), the system
+          re-evaluates whether a split into two nodes is warranted.
+    \item \textbf{Incorrect prerequisite assignment}: a spurious
+          prerequisite edge blocks the new node or an existing node.
+          Safeguard: if the new node remains unresolved after $h_{\max}$
+          attempts, its prerequisite edges are re-evaluated.
+    \item \textbf{Runaway graph growth}: a pathological user provides
+          unlimited novel information, causing the graph to grow without
+          bound. Safeguard: a maximum graph size $N_{\max}$ (default 150)
+          caps the number of nodes; beyond this, new entities are stored
+          in memory but not added to the graph.
+  \end{itemize}
+}
+% ============================================================================
+
+
+
+% 4. DISCUSSION
+% ============================================================================
+\section{Discussion}
+\label{sec:discussion}
+
+% --- Paragraph 1: Key finding and conceptual contribution ---
+The central finding of this work is that structured information gathering
+is a distinct capability from memory and from general planning, and current
+LLM agent architectures lack the appropriate primitive for it. Memory
+enables retention; planning enables action sequencing; but neither ensures
+systematic, dependency-aware coverage of a defined information space.
+DualGraph cleanly separates three architectural primitives: memory
+(retention of acquired information), task control (determining what to
+ask next, subject to structural constraints), and interaction management
+(formulating questions coherently). The dual-graph formulation, grounded
+in the neighbor-conditioned stability principle, provides both formal
+guarantees and practical effectiveness across diverse domains.
+
+% --- Paragraph 2: Why graphs, and the NCS insight ---
+The theoretical contribution of neighbor-conditioned stability provides a
+deeper answer to the question ``why graphs?''\ that goes beyond the
+operational argument that graphs conveniently encode prerequisites. Graphs
+are the \emph{correct} abstraction for information-gathering tasks because
+such tasks inherently possess \emph{local dependency structure}: whether a
+particular entity needs to be queried depends not on the global conversation
+state but on the states of its logically and semantically adjacent entities.
+This locality is precisely what graph edges encode and what flat
+representations---checklists, priority queues, linear plans---discard. The
+NCS principle makes this locality explicit and actionable: it guarantees
+that the agent's behavior is stable under distant state changes, preventing
+the oscillatory and inconsistent behavior observed in globally-reasoning
+agents that attempt to re-evaluate all priorities from scratch at every turn.
+
+The connection to dynamic programming further clarifies the framework's
+theoretical standing. Just as Bellman's principle of optimality decomposes
+a global optimization over an exponentially large state space into local
+value updates that propagate along state-transition edges, DualGraph
+decomposes the global information-gathering optimization into local
+priority updates that propagate along prerequisite and association edges.
+The greedy policy inherits near-optimality guarantees from the submodularity
+of coverage, and NCS ensures that these guarantees are achieved with local
+(rather than global) computation per turn.
+
+% --- Paragraph 3: Why dual graphs, not single graph ---
+The ablation analysis reveals that prerequisite and association edges serve
+complementary and non-interchangeable functions: prerequisites ensure the
+\emph{logical validity} of questions (asking about nephropathy before
+confirming renal function is meaningless), while associations ensure
+\emph{conversational coherence} (jumping from medication history to family
+social dynamics is jarring and reduces oracle cooperation). Merging them
+into a single graph degrades both properties because the merged edges
+conflate ``must come before'' with ``is related to,'' losing the directional
+semantics of prerequisites and the symmetric semantics of association.
+This separation is analogous to the distinction between control flow and
+data flow in programming language design: both are essential, but collapsing
+them produces a less expressive and less analyzable structure.
+
+% --- Paragraph 4: Generality and graph construction ---
+The semi-automatic graph construction pipeline demonstrates that the
+framework's requirements are not prohibitively domain-specific. Task graphs
+achieving [X]\% F1 against expert-designed ground truth can be generated
+automatically from textual task specifications, with expert review requiring
+only [Y] minutes per domain. Downstream performance using auto-generated
+graphs is within [Z]\% of expert-designed graphs, suggesting that the
+framework is robust to moderate graph imperfections---a consequence of the
+NCS principle, which localizes the effect of any single erroneous edge to
+the immediate neighborhood. This robustness is confirmed by the
+perturbation experiments (Section~\ref{sec:methods_robustness}), which
+show graceful degradation rather than catastrophic failure under edge
+deletion, addition, and reversal.
+
+% --- Paragraph 5: The memory quality side-effect ---
+An unexpected finding is that DualGraph improves not only task completion
+but also memory quality, as evidenced by the LoCoMo benchmark results
+(Table~\ref{tab:locomo}). Because the graph controller feeds
+entity-tagged, confidence-scored, structurally organized information into
+memory rather than raw dialogue text, retrieval precision improves as a
+side-effect. The NCS mechanism further contributes by ensuring that stored
+entity states are consistent and stable: entities are updated only when
+their neighborhoods change, reducing contradictory overwrites that degrade
+multi-hop and temporal query performance. This suggests that task control
+and memory quality are synergistic rather than independent---a finding
+with implications for memory system design more broadly.
+
+% --- Paragraph 6: Limitations (revised: evolving DAG partially addresses
+%     the old limitation about pre-defined entity sets) ---
+Several limitations should be noted. Although the evolving-DAG extension
+substantially relaxes the closed-world assumption of static task graphs,
+it still requires that the initial graph cover the \emph{majority} of
+expected entities; the online-discovery mechanism is designed for
+occasional emergent entities, not for tasks where the information space
+is entirely unknown at the outset. Open-ended tasks such as creative
+brainstorming, psychotherapy, or exploratory research interviews, where
+the relevant entities emerge dynamically and constitute the majority of
+the information space, fall outside the current scope and would require a
+fundamentally different graph-seeding mechanism. The oracle cooperation
+model assumes a generally cooperative interlocutor; adversarial or
+deliberately deceptive settings would require additional mechanisms. The
+prospective pilot is small-scale and single-center, providing feasibility
+evidence rather than definitive clinical validation. Computationally,
+while the NCS-based update is efficient for typical graph sizes
+($|V| \leq 100$), very large entity sets ($|V| > 1000$) or high-frequency
+node attachment (multiple new entities per turn) would benefit from
+hierarchical graph decomposition and batched NCS updates. We evaluate with
+one base LLM family (Qwen-2.5-32B); generalization to other architectures
+should be verified. The evolving-DAG mechanism relies on the extraction
+module's ability to detect that user-provided information does not map to
+any existing node---a classification problem that may produce false
+positives (spurious node creation) or false negatives (missed emergent
+entities); we report both rates in the evaluation but do not claim
+optimal detection. Finally, the theoretical analysis assumes independent
+entity resolution probabilities, whereas in practice, resolving one entity
+may change the probability of resolving others through trust-building,
+contextual priming, or information leakage.
+
+% --- Paragraph 7: Broader implications ---
+As LLM agents are deployed in high-stakes information-gathering
+settings---clinical intake, legal discovery, financial due diligence,
+regulatory compliance---the gap between ``can remember'' and ``will
+systematically complete'' becomes safety-critical. An agent that remembers
+a patient's name but fails to ask about drug allergies creates a false
+sense of competence. DualGraph provides a principled, auditable mechanism
+for task control: the graph structure is inspectable, the NCS updates are
+traceable, and the coverage metric is quantifiable. The framework
+complements rather than competes with advances in memory management and
+reasoning capabilities.
+
+% --- Paragraph 8: Future work (revised: evolving DAG is now achieved;
+%     new future directions) ---
+Several directions for future work emerge from this framework. The most
+immediate is \emph{hierarchical evolving DAGs} for tasks with nested
+sub-goals: a top-level DAG over goal categories, each containing a
+sub-DAG over specific entities, with NCS operating at both levels.
+A second direction is \emph{multi-agent coordination}: multiple
+DualGraph-controlled agents sharing or partitioning a single task graph,
+with NCS providing the locality guarantee that one agent's updates do not
+invalidate another agent's traversal plan---a property that maps naturally
+to distributed dynamic programming.
+A third direction is \emph{adversarial robustness}: extending the oracle
+cooperation model to account for deliberately misleading responses,
+integrating contradiction detection into the NCS update rule so that
+inconsistent information triggers neighborhood re-evaluation.
+A fourth is integration with \emph{multimodal inputs}---clinical images,
+sensor data, uploaded documents---that resolve entities through
+non-conversational channels; the evolving-DAG mechanism already provides
+the infrastructure for attaching new nodes discovered through non-textual
+modalities.
+Finally, larger prospective studies with clinical outcome endpoints---blood
+pressure reduction, medication adherence, patient satisfaction, and
+time-to-treatment---would establish the clinical impact that justifies
+deployment at scale.
+
+% ============================================================================
+% 5. METHODS
+% ============================================================================
+\section{Methods}
+\label{sec:methods}
+
+\subsection{DualGraph architecture}
+\label{sec:methods_architecture}
+
+\subsubsection{Dual-graph representation}
+
+The entity prerequisite graph $G_P = (V, E_P)$ is a directed acyclic graph
+encoding logical dependency among required information entities. The
+association graph $G_A = (V, E_A, w_A)$ is an undirected weighted graph
+encoding semantic relatedness among the same entities for coherent topic
+transitions. Nodes in $V$ correspond to atomic information units required for
+the target task; each node maintains the belief distribution, entropy, and
+metadata described in Definitions~\ref{def:entropy} and~\ref{def:ncs}. Edges
+in $E_P$ represent hard prerequisite constraints (entity $u$ must be resolved
+before entity $v$ can be meaningfully queried). Edges in $E_A$ represent
+semantic association, with weights $w_A(u, v)$ proportional to the cosine
+similarity of entity description embeddings.
+
+The two graphs share the same node set $V$ but encode complementary
+information: $G_P$ encodes the ``must come before'' relation (directed,
+acyclic), while $G_A$ encodes the ``is related to'' relation (undirected,
+potentially cyclic). This separation is essential: merging them would lose
+the directional semantics of prerequisites and the community structure of
+associations.
+
+\subsubsection{Neighbor-conditioned stability implementation}
+
+At each dialogue turn, after the user response is processed and entity
+beliefs are updated, the NCS mechanism determines which node scores require
+recomputation. Let $\Delta_t \subseteq V$ be the set of entities whose belief
+distributions changed at turn $t$ (typically $|\Delta_t| = 1$, the entity
+that was directly queried, though it may include additional entities if the
+user's response provides information about multiple entities). The update
+frontier $\mathcal{U}_t = \{v \in V : \mathcal{N}(v) \cap \Delta_t \neq
+\emptyset\} \cup \Delta_t$ is computed, and scores are recomputed only for
+$v \in \mathcal{U}_t$. All other scores are guaranteed unchanged by NCS
+(Proposition~\ref{prop:local_update}).
+
+In practice, this is implemented as a \texttt{dirty flag} mechanism: each
+node maintains a boolean flag that is set to \texttt{true} when any of its
+neighbors' beliefs change. Only flagged nodes are re-scored; flags are
+cleared after re-scoring. This reduces per-turn score computation from
+$O(|V|)$ to $O(|\mathcal{U}_t|) = O(\Delta_{\max})$.
+
+\subsubsection{Node scoring and selection}
+
+At each dialogue turn, the controller selects the next entity to query from
+the frontier $\mathcal{F}^{(t)}$ (Definition~\ref{def:frontier}). For each
+frontier entity $v$, the composite score is:
+\begin{equation}
+  \mathrm{Score}(v) = \alpha \cdot \tilde{I}(v) + \beta \cdot T(v)
+    + \gamma \cdot C(v),
+  \label{eq:score}
+\end{equation}
+where $\tilde{I}(v) = I(v) / \max_{u \in \mathcal{F}} I(u)$ is normalized
+importance over the current frontier, $T(v)$ is the precomputed PageRank
+centrality of $v$ in $G_A$ (capturing structural importance: nodes central in
+the association graph are topic hubs that connect multiple information
+clusters), and $C(v) = \mathbf{1}[\mathrm{comm}(v) =
+\mathrm{comm}(v_{\mathrm{prev}})]$ is a binary community continuity score
+that favors entities in the same semantic community as the most recently
+queried entity, promoting topically coherent conversation flow.
+
+Community structure is detected by applying the Leiden
+algorithm~\cite{traag2019leiden} to $G_A$ at initialization. The resolution
+parameter is set to [value] to yield communities of [typical size] entities,
+corresponding to natural topic clusters.
+
+\placeholder{%
+  \textbf{Specify parameter values:}
+  $\alpha = $ [value], $\beta = $ [value], $\gamma = $ [value].\\
+  \textbf{Hit counters:} Each node maintains a counter $h_v$ tracking how
+  many times it has been queried. If $h_v \geq h_{\max}$ (default [value]),
+  the node is deprioritized by multiplying $\mathrm{Score}(v)$ by a decay
+  factor $\rho^{h_v - h_{\max}}$ (default $\rho = $ [value]). This prevents
+  the agent from repeatedly querying an entity that the user cannot or will
+  not answer, while still allowing a limited number of re-attempts for
+  partially informative responses.
+}
+
+\subsubsection{Information extraction and confidence gating}
+
+After each user response, an extraction module parses the response to identify
+entity values. Each extracted value is assigned a confidence score
+$\rho_v \in [0,1]$ based on directness (explicitly stated vs.\ inferred),
+consistency (agreement with previously stored values), and specificity (precise
+values vs.\ vague ranges). Values with $\rho_v < \rho_{\min}$ (default 0.6)
+are flagged as unreliable and trigger targeted clarification at the next
+appropriate opportunity (respecting NCS: the low-confidence extraction sets
+the entity's dirty flag, ensuring it is reconsidered) rather than being
+committed to memory.
+
+Belief distributions are updated via a Bayesian update rule:
+\begin{equation}
+  b_{v,k}^{(t+1)} = \frac{b_{v,k}^{(t)} \cdot \ell(o_v \mid s_k)}
+    {\sum_{j=1}^{K} b_{v,j}^{(t)} \cdot \ell(o_v \mid s_j)},
+  \label{eq:belief_update}
+\end{equation}
+where $\ell(o_v \mid s_k)$ is the likelihood of the observed response $o_v$
+given that entity $v$ is in state $s_k$.
+
+\placeholder{%
+  \textbf{Specify likelihood model:} How is $\ell(o_v \mid s_k)$
+  computed in practice? Options:
+  \begin{itemize}[noitemsep]
+    \item LLM-based: prompt the LLM to assess the probability that the
+          user's response indicates state $s_k$. Calibrate with
+          temperature scaling.
+    \item Rule-based: for structured entities (blood pressure, medication
+          names), use pattern matching with predefined state categories.
+    \item Hybrid: rule-based for structured entities, LLM-based for
+          free-text entities.
+  \end{itemize}
+}
+
+\subsubsection{Long-term memory integration}
+
+Confirmed entities (those with $\rho_v \geq \rho_{\min}$ and
+$H(v) \leq \delta$) are stored as structured key-value pairs in a persistent
+memory store indexed by entity embeddings. At each turn, the top-$m$ most
+relevant memory items (by cosine similarity to the current query context and
+the active entity's neighborhood in $G_A$) are retrieved and injected into
+the prompt context, providing the LLM with relevant previously acquired
+information for formulating contextually appropriate follow-up questions.
+
+\placeholder{%
+  \textbf{Specify memory architecture details:}
+  \begin{itemize}[noitemsep]
+    \item Storage format: JSON-structured entity records with fields:
+          entity\_id, entity\_name, value, confidence, timestamp, source\_turn,
+          evidence\_snippet, belief\_distribution.
+    \item Embedding model: BAAI/bge-large-[language]-v1.5.
+    \item Retrieval: HNSW approximate nearest-neighbor index; top-$m$
+          (default $m = 5$).
+    \item Conflict resolution: when a new extraction conflicts with a stored
+          value, both are retained with timestamps; the higher-confidence
+          value is used for downstream reasoning, but the conflict is flagged
+          for potential clarification. This design leverages NCS: the
+          conflicting entity's dirty flag is set, ensuring its score
+          increases (due to increased entropy) and it is re-queried for
+          clarification.
+    \item Capacity management: [describe eviction or summarization policy if
+          memory grows too large].
+  \end{itemize}
+}
+
+\subsection{Semi-automatic graph construction}
+\label{sec:graph_construction}
+
+The knowledge embedded in task specifications—clinical guidelines,
+regulatory forms, troubleshooting manuals—implicitly defines a graph of
+information entities and their relationships. The challenge is to extract
+this latent graph structure efficiently with minimal expert effort. We
+present a four-stage pipeline.
+
+\placeholder{%
+  \textbf{Step 1: Entity extraction.}
+  Input: task specification document (e.g., clinical guideline chapter,
+  insurance claim form, troubleshooting flowchart).
+  Method: Prompt an LLM (e.g., GPT-4o, Qwen-Max) with: ``Given the following
+  task specification, extract all required information entities that must be
+  collected from the user. For each entity, provide: name, description,
+  data type, importance (1--5), and whether it is conditionally required.''
+  Aggregate across $k=5$ independent prompts; retain entities appearing in
+  $\geq 3/5$ responses.
+
+  \textbf{Step 2: Prerequisite edge identification.}
+  For each ordered pair $(u, v)$ of extracted entities, prompt the LLM:
+  ``Must entity $u$ be resolved before entity $v$ can be meaningfully
+  queried? Answer yes or no and explain why.'' Aggregate across $k=5$
+  prompts; edges with $\geq 3/5$ ``yes'' votes are included in $E_P$.
+  Verify DAG property (no cycles); if cycles exist, break by removing the
+  lowest-confidence edge in each cycle (using Tarjan's algorithm to identify
+  strongly connected components).
+
+  \textbf{Step 3: Association edge construction.}
+  Embed entity descriptions using BAAI/bge-large. Compute pairwise cosine
+  similarity. Retain edges with similarity $\geq \theta$ (default 0.4).
+  Alternatively, use LLM-rated semantic relatedness (Likert 1--5; retain
+  $\geq 3$). The resulting $G_A$ captures the local dependency structure
+  that NCS exploits: entities with high association weight are semantically
+  close and changes to one are likely to affect the relevance of the other.
+
+  \textbf{Step 4: Expert validation.}
+  Domain expert reviews the auto-generated graph. An important property
+  of the NCS principle applies here: because the effect of any single edge
+  correction is localized to the immediate neighborhood, experts can
+  evaluate and correct edges independently without worrying about cascading
+  global effects. This makes the review process modular and efficient.
+  Metrics: time to review, number of corrections (edges added/removed/
+  modified, nodes added/removed), and post-correction F1 against a
+  gold-standard graph if available.
+}
+
+\subsection{Evaluation domains}
+\label{sec:methods_domains}
+
+\placeholder{%
+  \textbf{Domain 1: Hypertension clinical intake.}
+  From DrHyper. $|V| = $ [number of entity nodes from the clinical entity
+  list; approximately 20--25 top-level groups, expandable to $\sim$60
+  individual entities]. Prerequisite graph depth $L = $ [value].
+  Association graph density: [value]. Community count: [value].
+  Task: systematically collect all required clinical entities for
+  hypertension classification, risk stratification, and management planning.
+  Ground truth: expert-annotated patient profiles (200 cases from DrHyper;
+  58 additional for ablation).
+}
+
+\placeholder{%
+  \textbf{Domain 2: Diabetes clinical intake.}
+  Construct a parallel entity graph for type 2 diabetes initial assessment
+  based on ADA Standards of Care. Required entities: HbA1c, fasting glucose,
+  BMI, medication history, complication screening (retinal exam, foot exam,
+  renal function, cardiovascular risk), lifestyle factors, psychosocial
+  screening. $|V| \approx $ [estimate]. $L = $ [estimate].
+  Use physician-authored patient profiles for evaluation ([N] cases).
+}
+
+\placeholder{%
+  \textbf{Domain 3: [Non-medical domain, e.g., insurance claims intake.]}
+  Entity graph for auto insurance claim processing: accident details (date,
+  location, description), parties involved, injury/damage, police report,
+  witness information, policy details, prior claims, liability determination.
+  $|V| \approx $ [estimate]. $L = $ [estimate].
+  Ground truth from [source: synthetic claim profiles or partnership with
+  insurance company].
+}
+
+\placeholder{%
+  \textbf{Domain 4: [Non-medical domain, e.g., IT technical support triage.]}
+  Entity graph for enterprise IT support: symptom description, affected
+  systems, error messages, recent changes, environment details (OS, software
+  versions), network status, reproducibility steps, business impact,
+  workaround status. $|V| \approx $ [estimate]. $L = $ [estimate].
+  Ground truth from [source: synthetic support tickets or partnership].
+}
+
+\begin{table}[!htbp]
+\centering
+\caption{Graph structural characteristics across evaluation domains.}
+\label{tab:graph_structure}
+\small
+\input{generated/tab_graph_structure.tex}
+\end{table}
+
+\subsection{Baseline implementations}
+\label{sec:methods_baselines}
+
+\placeholder{%
+  \textbf{Implementation details for each baseline:}
+
+  \textbf{ReAct:} Standard Thought-Action-Observation loop. At each turn,
+  the agent generates a thought (``I should ask about X''), asks the
+  question, observes the patient response. No persistent memory beyond
+  context window. System prompt includes the task description and entity
+  list (same information as DualGraph's graph, but as flat text). Critically,
+  ReAct performs implicit global reasoning at every turn (the LLM considers
+  the entire context window), contrasting with DualGraph's local NCS-based
+  updates.
+
+  \textbf{Reflexion:} ReAct + self-reflection. After every $k$ turns
+  (default $k=5$), the agent generates a reflection: ``What have I missed?
+  What should I prioritize next?'' Reflection is appended to context.
+  Reflexion can be viewed as an approximation to global recomputation
+  (periodic rather than per-turn), but without graph structure to guide
+  the reflection, it lacks the locality guarantees of NCS.
+
+  \textbf{Plan-and-Solve:} At the start of the dialogue, the agent generates
+  a complete plan (ordered list of entities to collect). It then executes
+  the plan sequentially, marking items as complete. Plan is not revised
+  mid-dialogue (tests rigidity). This is the extreme opposite of NCS:
+  all computation is front-loaded and no local updates occur during
+  execution.
+
+  \textbf{MemGPT / Letta:} Uses the official MemGPT framework with tiered
+  memory (main context + archival memory + recall memory). The agent can
+  explicitly push/pop/search memory. System prompt includes the task
+  description. MemGPT provides memory locality (tiered retrieval) but not
+  task-state locality (no graph structure).
+
+  \textbf{Mem0:} Uses the official Mem0 SDK with automatic memory
+  management. System prompt includes the task description.
+
+  \textbf{Checklist prompting:} The system prompt includes a structured
+  checklist of all required entities with checkboxes. The agent is
+  instructed: ``Systematically ask about each unchecked item. Mark items
+  as complete when the patient provides the information.'' No graph, no
+  dynamic scoring. This is equivalent to DualGraph with $E_P = E_A =
+  \emptyset$ and provides a direct test of the value of graph structure.
+
+  \textbf{Memory-only (LLM + a-mem):} Same base LLM with a-mem persistent
+  memory. No task control, no checklist. Matches the 58-case baseline from
+  DrHyper.
+
+  All baselines use the same base LLM (Qwen-2.5-32B), the same system
+  prompt content (task description, entity descriptions), and the same
+  patient simulators/profiles. The only difference is the control mechanism.
+}
+
+\subsection{Patient / user simulators}
+\label{sec:methods_simulators}
+
+\placeholder{%
+  \textbf{Clinical domains:}
+  Patient simulation by DeepSeek-R1 (different model family from base LLM)
+  given a structured patient profile. Same design as DrHyper: no retrieval,
+  no guideline access, no knowledge leakage. Profile includes demographics,
+  history, lab values, medications, lifestyle, social factors. Simulator
+  responds only from profile. Temperature fixed for reproducibility.
+  Patient ``character types'' (cooperative, anxious, evasive, low health
+  literacy) as in DrHyper.
+
+  \textbf{Non-medical domains:}
+  User simulation by the same simulator LLM given a structured case profile
+  (e.g., insurance claim details, IT issue description). Same constraints:
+  no external knowledge, responds only from profile.
+
+  \textbf{Physician-supervised (clinical pilot):}
+  Real patients interact with the system directly; clinician observes in
+  real time and can intervene. No simulator involved.
+}
+
+\subsection{Evaluation metrics}
+\label{sec:methods_metrics}
+
+\placeholder{%
+  \textbf{Primary metrics (all domains):}
+  \begin{itemize}[noitemsep]
+    \item \textbf{Entity acquisition rate}: fraction of required entities
+          resolved to confidence $\geq \rho_{\min}$.
+    \item \textbf{Information concordance}: accuracy of acquired entity
+          values relative to ground-truth profile.
+    \item \textbf{Information un-omission}: fraction of required entities
+          not omitted (i.e., at least queried, whether or not resolved).
+    \item \textbf{Conversation turns}: total turns to termination.
+    \item \textbf{Turn efficiency}: acquisition rate divided by turns
+          (acquisition per turn).
+  \end{itemize}
+
+  \textbf{Secondary metrics:}
+  \begin{itemize}[noitemsep]
+    \item \textbf{Coherence rating}: human-rated topic coherence (1--5
+          Likert) on a sample of [N] dialogues per condition.
+    \item \textbf{Prerequisite violation rate}: fraction of turns where an
+          entity was queried before all prerequisites were resolved.
+    \item \textbf{Redundancy rate}: fraction of turns that re-query an
+          already-resolved entity without new information gain.
+    \item \textbf{Score stability}: fraction of entity scores unchanged per
+          turn (direct measure of NCS effectiveness).
+    \item \textbf{CMC} (Conversation Memory Capacity): as defined in DrHyper.
+    \item \textbf{IRC} (Information Retrieval Capacity): as defined in
+          DrHyper.
+  \end{itemize}
+
+  \textbf{Downstream metrics (domain-specific):}
+  \begin{itemize}[noitemsep]
+    \item Clinical: diagnosis accuracy, risk stratification accuracy,
+          medication rationality, lifestyle/follow-up scores.
+    \item Insurance: claim adjudication accuracy, missing-info rate.
+    \item IT support: resolution rate, escalation accuracy, time to
+          resolution.
+  \end{itemize}
+
+  \textbf{Statistical analysis:}
+  Bootstrap 95\% CIs for all metrics. Welch's $t$-test or Mann--Whitney $U$
+  for pairwise comparisons. Bonferroni correction for multiple comparisons
+  across domains. Effect sizes (Cohen's $d$). Pre-registration of primary
+  endpoints.
+}
+
+\subsection{Graph robustness and NCS perturbation analysis}
+\label{sec:methods_robustness}
+
+To assess the robustness of the framework to imperfect graph specifications
+and to empirically validate the locality predictions of NCS, we conduct
+systematic perturbation experiments.
+
+\placeholder{%
+  \textbf{Perturbation experiments:}
+  \begin{enumerate}[noitemsep]
+    \item \textbf{Edge deletion}: Randomly remove $p\%$ of prerequisite edges
+          ($p \in \{10, 20, 30, 50\}$) and measure acquisition degradation.
+          NCS predicts that deleting an edge $(u, v)$ affects only $v$ and
+          its downstream dependents, not the entire graph.
+    \item \textbf{Edge addition}: Randomly add $p\%$ spurious prerequisite
+          edges and measure turn inflation (unnecessary ordering constraints).
+          NCS predicts local effects: the added edge blocks only the target
+          node until the spurious prerequisite is resolved.
+    \item \textbf{Edge reversal}: Randomly reverse $p\%$ of prerequisite
+          edges (wrong ordering) and measure prerequisite violation rate and
+          acquisition.
+    \item \textbf{Node deletion}: Remove $p\%$ of nodes from the graph
+          (simulating incomplete specification) and measure coverage of
+          the remaining ground-truth entities.
+    \item \textbf{Weight perturbation}: Add Gaussian noise
+          $\mathcal{N}(0, \sigma^2)$ to importance weights $w_v$ and measure
+          downstream sensitivity. NCS predicts that weight changes affect
+          only the perturbed node and its frontier competitors, not the
+          global trajectory.
+    \item \textbf{NCS validation}: For each perturbation, compare the set of
+          nodes whose scores actually changed to the set predicted by NCS
+          (the combined neighborhood of perturbed edges/nodes). If NCS is
+          valid, these sets should be identical.
+  \end{enumerate}
+  Run on hypertension domain; verify key findings on one additional domain.
+  Report degradation curves (performance vs.\ perturbation rate) and NCS
+  prediction accuracy.
+}
+
+\subsection{Computational environment}
+\label{sec:methods_compute}
+
+\placeholder{%
+  Hardware: [GPU type, count, memory].\\
+  Software: [Python version, PyTorch version, LLM inference framework].\\
+  Inference cost per dialogue: [tokens, time, cost].\\
+  Graph construction cost: [time per domain, LLM API calls].\\
+  NCS overhead measurement: [describe profiling methodology for measuring
+  per-turn score update time with and without NCS].
+}
+
+
+% ============================================================================
+% 6. DATA AND CODE AVAILABILITY
+% ============================================================================
+\section*{Data Availability}
+
+\placeholder{%
+  \begin{itemize}[noitemsep]
+    \item Task graph specifications (all 4 domains): released on GitHub
+          [URL].
+    \item Auto-generated and expert-validated graphs: released as JSON on
+          GitHub.
+    \item Evaluation case profiles (non-clinical domains): released in full.
+    \item Clinical case profiles: de-identified data available under data
+          access agreement (contact corresponding author).
+    \item LoCoMo benchmark: public benchmark [cite].
+    \item DualGraph codebase: released on GitHub [URL].
+  \end{itemize}
+}
+
+\section*{Code Availability}
+
+\placeholder{%
+  All code for DualGraph (graph construction, NCS-based node scoring,
+  memory module, evaluation harness, baseline implementations) will be
+  released at [GitHub URL] under [license]. Evaluation scripts and
+  configuration files for all baselines are included. A reference
+  implementation of the NCS dirty-flag mechanism is provided as a
+  standalone module for integration with other agent frameworks.
+}
+
+% ============================================================================
+% ACKNOWLEDGEMENTS
+% ============================================================================
+\section*{Acknowledgements}
+
+\placeholder{Funding sources, institutional support, compute credits.}
+
+% ============================================================================
+% AUTHOR CONTRIBUTIONS (NMI requires CRediT)
+% ============================================================================
+\section*{Author Contributions}
+
+\placeholder{%
+  CRediT format.\\
+  [Author A]: Conceptualization, Methodology, Software, Writing -- Original
+  Draft.\\
+  [Author B]: Data Curation, Investigation, Validation.\\
+  etc.
+}
+
+% ============================================================================
+% COMPETING INTERESTS
+% ============================================================================
+\section*{Competing Interests}
+
+The authors declare no competing interests.
+
+
+% ============================================================================
+% REFERENCES
+% ============================================================================
+
+\newpage
+\bibliographystyle{unsrtnat}
+
+\begin{thebibliography}{99}
+
+\bibitem{packer2023memgpt}
+Packer, C.\ et al.\ MemGPT: Towards LLMs as operating systems.
+\textit{arXiv preprint arXiv:2310.08560} (2023).
+
+\bibitem{mem0_2025}
+Chhikara, P., Khant, D., Aryan, S., Singh, T.\ \& Yadav, D.\
+Mem0: Building production-ready AI agents with scalable long-term memory.
+\textit{arXiv preprint arXiv:2504.19413} (2025).
+
+\bibitem{amem_2024}
+\placeholder{A-mem reference. Autonomous memory framework for LLM agents.}
+
+\bibitem{yao2023react}
+Yao, S.\ et al.\ ReAct: Synergizing reasoning and acting in language models.
+\textit{ICLR} (2023).
+
+\bibitem{shinn2023reflexion}
+Shinn, N.\ et al.\ Reflexion: Language agents with verbal reinforcement
+learning. \textit{NeurIPS} (2023).
+
+\bibitem{wang2023plan}
+Wang, L.\ et al.\ Plan-and-Solve prompting: Improving zero-shot
+chain-of-thought reasoning by large language models. \textit{ACL} (2023).
+
+\bibitem{traag2019leiden}
+Traag, V.A., Waltman, L.\ \& van Eck, N.J.\ From Louvain to Leiden:
+guaranteeing well-connected communities. \textit{Scientific Reports}
+\textbf{9}, 5233 (2019).
+
+\bibitem{bellman1957dynamic}
+Bellman, R.\ \textit{Dynamic Programming}. Princeton University Press (1957).
+
+\bibitem{ref_interaction_failure_1}
+\placeholder{Sharma et al.\ (2024). Nature Medicine study on LLM medical
+assistants and interaction failure.}
+
+\bibitem{ref_interaction_failure_2}
+\placeholder{Additional reference on agent task-completion failures in
+deployed systems.}
+
+\bibitem{locomo_ref}
+\placeholder{LoCoMo: Long Context and Memory benchmark reference.}
+
+\bibitem{calinescu2011}
+Calinescu, G., Chekuri, C., P\'{a}l, M.\ \& Vondr\'{a}k, J.\ Maximizing a
+monotone submodular function subject to a matroid constraint. \textit{SIAM
+Journal on Computing} \textbf{40}, 1740--1766 (2011).
+
+\bibitem{vondrak2008}
+Vondr\'{a}k, J.\ Optimal approximation for the submodular welfare problem in
+the value oracle model. \textit{STOC} (2008).
+
+\bibitem{puterman2014mdp}
+Puterman, M.L.\ \textit{Markov Decision Processes: Discrete Stochastic
+Dynamic Programming}. John Wiley \& Sons (2014).
+
+\bibitem{bertsekas2012dp}
+Bertsekas, D.P.\ \textit{Dynamic Programming and Optimal Control}, Vol.~II,
+4th ed.\ Athena Scientific (2012).
+
+\bibitem{page1999pagerank}
+Page, L., Brin, S., Motwani, R.\ \& Winograd, T.\
+The PageRank citation ranking: Bringing order to the web.
+\textit{Stanford InfoLab Technical Report} (1999).
+
+\placeholder{%
+  \textbf{Additional references needed:}
+  \begin{itemize}[noitemsep]
+    \item MemGPT/Letta updated reference (2024 version)
+    \item Recent agent benchmarks (AgentBench, WebArena, SWE-Bench)
+    \item Task-oriented dialogue systems (e.g., MultiWOZ baselines, SGD)
+    \item Dialogue state tracking literature
+    \item Active information acquisition / adaptive questionnaire literature
+    \item Clinical decision support systems reviews
+    \item Submodular optimization surveys (Krause \& Golovin, 2014)
+    \item Information-theoretic active learning references
+    \item Graph-based planning references (HTN planning, STRIPS-like)
+    \item Asynchronous dynamic programming references (Bertsekas \&
+          Tsitsiklis, 1989)
+    \item Value iteration convergence results
+    \item Relevant NMI-published agent/LLM papers (2023--2025) for
+          positioning
+  \end{itemize}
+}
+
+\end{thebibliography}
+
+
+% ============================================================================
+% SUPPLEMENTARY INFORMATION
+% ============================================================================
+\newpage
+\appendix
+\renewcommand{\thesection}{Supplementary \Alph{section}}
+
+\section{Proof of Theorem~\ref{thm:convergence}}
+\label{app:proof}
+
+\placeholder{%
+  Full proof of convergence bound. Structure:
+  \begin{enumerate}[noitemsep]
+    \item Topological layering of $G_P$.
+    \item Per-layer coverage analysis using submodularity.
+    \item Geometric series bound on expected queries per entity.
+    \item Aggregation across layers and entities.
+    \item Discussion of tightness and when the bound is loose.
+    \item Formal statement and proof that NCS does not affect
+          convergence guarantees (NCS changes computation but not
+          the mathematical values of scores, so all optimality
+          results carry through).
+  \end{enumerate}
+}
+
+\section{Proof of NCS Properties}
+\label{app:ncs_proofs}
+
+\placeholder{%
+  \textbf{Proposition~\ref{prop:ncs_holds} extended proof:}
+  Full formal proof with edge cases:
+  \begin{itemize}[noitemsep]
+    \item Handling of the normalization denominator
+          $\max_{u \in \mathcal{F}} I(u)$: when the frontier changes
+          (an entity is resolved and removed), \emph{all} frontier nodes'
+          normalized scores may change. However, this occurs only when a
+          frontier node's \emph{own} belief changes (triggering its dirty
+          flag) or when a non-frontier node enters the frontier (its
+          prerequisite parent was resolved, which is in its neighborhood).
+          Formalize this case.
+    \item Proof that the dirty-flag implementation is sound (no stale
+          scores persist).
+    \item Proof that NCS-based computation is equivalent to global
+          recomputation (same scores, different computation order).
+  \end{itemize}
+
+  \textbf{Dynamic programming connection formalized:}
+  \begin{itemize}[noitemsep]
+    \item Define the information-gathering MDP formally.
+    \item State the Bellman equation (from Remark~\ref{rem:dp}).
+    \item Prove the locality lemma: marginal value of querying $v$
+          depends only on $\mathcal{N}(v) \cap \mathcal{F}$.
+    \item Connect to asynchronous dynamic programming convergence
+          results (Bertsekas \& Tsitsiklis, 1989): NCS implements
+          a specific asynchronous update schedule determined by the
+          graph's edge structure.
+    \item Discuss gap between the MDP-optimal policy and the greedy
+          NCS policy; bound the approximation ratio.
+  \end{itemize}
+}
+
+\section{Extended Ablation Results}
+\label{app:ablation}
+
+\placeholder{%
+  Full ablation tables for all domains.
+  Parameter sensitivity plots.
+  Graph perturbation degradation curves.
+  NCS validation results: comparison of predicted vs.\ actual update sets.
+  Score oscillation analysis with and without NCS.
+}
+
+\section{Graph Construction: Full Prompts and Examples}
+\label{app:graph_prompts}
+
+\placeholder{%
+  Complete LLM prompts for entity extraction, prerequisite identification,
+  and association scoring.
+  Example auto-generated graphs for each domain (with corrections annotated).
+  Inter-annotator agreement statistics.
+  Analysis of which edge types (prerequisite vs.\ association) are harder
+  to auto-generate and why.
+}
+
+\section{Domain-Specific Task Graphs}
+\label{app:graphs}
+
+\placeholder{%
+  Visualizations of the full task graphs for all 4 domains.
+  Node and edge lists.
+  Community detection results with NCS neighborhood sizes.
+  PageRank distributions.
+  Neighborhood size distribution (empirical $\Delta$ distribution
+  vs.\ $\Delta_{\max}$).
+}
+
+\section{Patient / User Simulator Details}
+\label{app:simulator}
+
+\placeholder{%
+  Full simulator prompts.
+  Patient character type definitions and distributions.
+  Simulator validation (do simulated patients behave realistically?).
+  Oracle cooperation probability $\phi$ calibration by character type.
+}
+
+\section{Long-Horizon Memory Benchmark (LoCoMo)}
+\label{app:locomo}
+
+To evaluate the memory component independently of the task controller, we
+benchmark on LoCoMo~\cite{locomo_ref}, a standardized long-horizon
+conversational memory benchmark with single-hop, multi-hop, and temporal
+queries over extended multi-session dialogues.
+
+\begin{table}[!htbp]
+\centering
+\caption{LoCoMo benchmark results. Overall accuracy (\%) and by query
+category. Best in bold.}
+\label{tab:locomo}
+\small
+\input{generated/tab_locomo.tex}
+\end{table}
+
+\placeholder{%
+  \textbf{Analysis.} DualGraph's memory module outperforms because the graph
+  controller feeds entity-tagged, confidence-scored, structurally organized
+  information into memory rather than raw dialogue text, improving retrieval
+  precision. The NCS mechanism further ensures consistent, stable entity
+  states that reduce contradictory overwrites, benefiting multi-hop and
+  temporal query accuracy. Note: Mem0's published LoCoMo performance
+  (reported as $+$26\% over OpenAI Memory~\cite{mem0_2025}) uses a different
+  evaluation protocol (their own splits and metrics); our evaluation uses
+  the standardized LoCoMo protocol from [cite] for fair comparison across
+  all methods.
+}
+
+\section{Prospective Pilot: Protocol and Detailed Results}
+\label{app:pilot}
+
+\placeholder{%
+  IRB approval documentation.
+  Consent process.
+  Inclusion/exclusion criteria.
+  Full results by case.
+  Clinician feedback (qualitative and quantitative).
+  Safety event log.
+}
+
+\section{Downstream Results}
+\label{app:downstream}
+
+\placeholder{%
+  Full clinical results from DrHyper (200 cases).
+  Diabetes downstream results.
+  Non-medical domain downstream results.
+  Error analysis by risk stratum (from DrHyper Section E.9).
+}
+
+\section{Computational Cost Analysis}
+\label{app:compute}
+
+\placeholder{%
+  Per-turn latency breakdown with and without NCS.
+  Total cost per dialogue by domain and method.
+  Scaling analysis: cost vs.\ $|V|$ and vs.\ $\Delta_{\max}$.
+  NCS speedup factor as a function of graph density.
+}
+
+
+\section{Evolving Inference DAG: Extended Analysis}
+\label{app:evolving}
+
+\placeholder{%
+  \textbf{A. Emergence detection precision and recall.}\\
+  For each domain, report:
+  \begin{itemize}[noitemsep]
+    \item Precision of emergence detection (fraction of flagged entities
+          that are genuinely new vs.\ false positives)
+    \item Recall of emergence detection (fraction of ground-truth emergent
+          entities correctly detected)
+    \item Breakdown by embedding-only filter vs.\ LLM-confirmed filter
+          (ablation of the two-stage detection pipeline)
+    \item Effect of $\theta_{\mathrm{match}}$ threshold on
+          precision-recall tradeoff
+  \end{itemize}
+
+  \textbf{B. Graph attachment quality.}\\
+  For each emergent node, compare the automatically assigned prerequisite
+  and association edges against expert annotation:
+  \begin{itemize}[noitemsep]
+    \item Edge-level precision and recall
+    \item DAG violation rate (proposed edges that would create cycles)
+    \item Importance weight correlation with expert ratings
+  \end{itemize}
+
+  \textbf{C. NCS containment under graph growth.}\\
+  For each node-attachment event across all dialogues:
+  \begin{itemize}[noitemsep]
+    \item Size of actual update frontier $|\mathcal{U}_t^{\mathrm{attach}}|$
+    \item Size of the graph $|V^{(t)}|$ at time of attachment
+    \item Ratio $|\mathcal{U}_t^{\mathrm{attach}}| / |V^{(t)}|$
+    \item Distribution of these ratios (histogram)
+    \item Comparison of NCS-predicted vs.\ actual changed scores (as in
+          static-graph NCS validation)
+  \end{itemize}
+
+  \textbf{D. Graph growth dynamics.}\\
+  Per domain:
+  \begin{itemize}[noitemsep]
+    \item Distribution of number of emergent entities per dialogue
+    \item Distribution of emergence timing (which turn do new entities
+          typically appear?)
+    \item Final graph sizes $|V^{(\infty)}|$ (distribution)
+    \item Types of emergent entities (categorized by domain experts)
+  \end{itemize}
+
+  \textbf{E. Failure mode statistics.}\\
+  \begin{itemize}[noitemsep]
+    \item False-positive emergence rate (duplicates created)
+    \item Post-hoc deduplication success rate
+    \item Incorrect prerequisite rate (edges later corrected)
+    \item Runaway growth cap activations (how often $N_{\max}$ reached)
+  \end{itemize}
+
+  \textbf{F. Qualitative examples.}\\
+  Full dialogue transcripts (3--4 per domain) showing evolving-DAG
+  activation. Annotate with graph snapshots at key turns.
+}
+
+\end{document}

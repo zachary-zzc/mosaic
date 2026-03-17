@@ -1,0 +1,71 @@
+# === Python (mosaic) ===
+__pycache__/
+*.py[cod]
+*.pyc
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+env/
+
+# === IDE / Editor ===
+.idea/
+*.iml
+.vscode/
+*.swp
+*.swo
+*~
+
+# === Misc ===
+*.json
+
+# === Mosaic: config & secrets ===
+config/*.cfg
+*.env
+.env.*
+
+# === Mosaic: embedding models (large binaries) ===
+mosaic/src/embedding_models/
+
+# === Mosaic: runtime / results ===
+mosaic/src/locomo results/
+mosaic/src/error_case/results/
+mosaic/src/error_case/conflict/results/
+*.pkl
+*.xlsx
+
+# === LaTeX (Manuscript) ===
+*.aux
+*.bbl
+*.blg
+*.fdb_latexmk
+*.fls
+*.log
+*.out
+*.synctex.gz
+*.toc
+*.lof
+*.lot
+
+# === OS ===
+.DS_Store
+Thumbs.db
