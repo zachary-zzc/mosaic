@@ -1,0 +1,18 @@
+\begin{tabular}{@{}lccccc@{}}
+\toprule
+& \multicolumn{2}{c}{\textbf{Pre-specified Acq.\ (\%)}}
+& \multicolumn{2}{c}{\textbf{Emergent Acq.\ (\%)}}
+& \textbf{Graph} \\
+\cmidrule(lr){2-3}\cmidrule(lr){4-5}
+\textbf{Method} & Hyp. & D3 & Hyp. & D3 & \textbf{Growth} \\
+\midrule
+ReAct & 74.2 & 71.3 & 0.0 & 0.0 & --- \\
+Reflexion & 76.5 & 73.6 & 0.0 & 0.0 & --- \\
+Plan-and-Solve & 65.2 & 61.0 & 0.0 & 0.0 & --- \\
+MemGPT & 58.2 & 55.1 & 0.0 & 0.0 & --- \\
+Mem0 & 59.8 & 56.9 & 0.0 & 0.0 & --- \\
+Checklist & 68.5 & 64.0 & 0.0 & 0.0 & --- \\
+\textbf{DualGraph (static)} & 94.7 & 91.8 & 0.0 & 0.0 & $|V|$ fixed \\
+\textbf{DualGraph (evolving)} & 94.2 & 91.2 & 72.5 & 68.3 & $+$K nodes \\
+\bottomrule
+\end{tabular}

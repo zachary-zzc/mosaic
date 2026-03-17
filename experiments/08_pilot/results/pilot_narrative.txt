@@ -1,0 +1,1 @@
+N = 42 consented patients, hypertension clinic. Entity acquisition: 91.2\% (DualGraph) vs.\ 88.5\% (clinician). Concordance: 89.8\%; clinician trust: mean 4.2/5 (range 3.5--4.8). Interventions: mean 1.2 per case (range 0--3). Safety: 3 flags; 2 true positives, 1 false positives. Evolving DAG: 28.5\% of cases; 85.0\% integrated. IRB: IRB-2024-XXXX.
