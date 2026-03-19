@@ -33,12 +33,17 @@ def setup_logger(name: str) -> logging.Logger:
         ch.setFormatter(formatter)
         logger.addHandler(ch)
 
-        # File output: write to Desktop/log/server.log.
-        desktop_path = os.path.join(os.path.expanduser("~"), "Desktop")
-        log_dir = os.path.join(desktop_path, "log")
-        if not os.path.exists(log_dir):
-            os.makedirs(log_dir)
-        log_path = os.path.join(log_dir, "server.log")
+        # File output: prefer project-relative log dir (e.g. mosaic/log or cwd/log)
+        _mosaic_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        log_dir = os.path.join(_mosaic_root, "log")
+        try:
+            if not os.path.exists(log_dir):
+                os.makedirs(log_dir)
+            log_path = os.path.join(log_dir, "server.log")
+        except OSError:
+            log_dir = os.path.join(os.getcwd(), "log")
+            os.makedirs(log_dir, exist_ok=True)
+            log_path = os.path.join(log_dir, "server.log")
 
         fh = logging.FileHandler(log_path, mode='a', encoding='utf-8')
         fh.setLevel(logging.INFO)

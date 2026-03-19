@@ -1,0 +1,14 @@
+# Mosaic 运行依赖（版本按需调整，建议在虚拟环境中安装）
+networkx>=2.0
+numpy>=1.20
+scikit-learn>=1.0
+sentence-transformers>=2.0
+keybert>=0.8
+openai>=1.0
+requests>=2.25
+# LLM / LangChain（若使用 ali_api 等，需兼容版本）
+langchain>=0.1
+langchain-core>=0.1
+langchain-openai>=0.0.5
+# 可选：tqdm 用于进度条
+tqdm>=4.60
