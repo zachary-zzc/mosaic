@@ -2,9 +2,12 @@ import json
 from datetime import datetime
 from typing import Dict, List, Any, Tuple
 from string import Template
-from src.assist import similarity_score, calculate_tfidf_similarity, build_instance_fragments, fetch_default_llm_model, \
-    serialize_instance
-from src.data.instance import update_data_from_messages, create_instances_from_messages
+from src.assist import (
+    calculate_tfidf_similarity,
+    build_instance_fragments,
+    fetch_default_llm_model,
+    serialize_instance,
+)
 from src.logger import setup_logger
 from networkx import Graph
 from src.unclass.prompts_unclass import PROMPT_CREATE_INSTANCE_UNCLASS, PROMPT_UPDATE_INSTANCE
@@ -226,12 +229,7 @@ class InstanceGraph:
                         message_contents.append(msg)
 
                 if message_contents:
-                    # 使用update_data_from_messages函数更新实例
-                    # 通过prompt更新实例，消息分配已在prompt中处理
-                    updated_instance = self.update_data_from_messages(
-                        instance=instance_data,
-                        messages=message_contents
-                    )
+                    updated_instance = self._update_instance_from_messages(instance_data, message_contents)
 
                     # 保存原来的instance_id
                     original_instance_id = instance_data.get("instance_id")
@@ -266,19 +264,16 @@ class InstanceGraph:
         # 3. 保存快照
         self._save_instances_snapshot()
 
-    def update_data_from_messages(self, instance, messages: List[str]):
-        """通过prompt更新实例数据，消息分配已在prompt中处理"""
-        align_update_prompt = Template(PROMPT_UPDATE_INSTANCE).substitute(
+    def _update_instance_from_messages(self, instance: dict, messages: List[str]):
+        """通过 unclass 专用 prompt 更新实例数据。"""
+        prompt = Template(PROMPT_UPDATE_INSTANCE).substitute(
             update_message="\n".join([f"- {msg}" for msg in messages]),
-            instance=instance
+            instance=instance,
         )
-
-        _logger.info(f"ALIGN_UPDATE_PROMPT: {align_update_prompt}")
-        response = self._llm.invoke(align_update_prompt)
-        _logger.info(f"ALIGN_UPDATE_RESPONSE: {response.content}")
-        updated_instances = json.loads(response.content)
-
-        return updated_instances
+        _logger.info("ALIGN_UPDATE_PROMPT: %s", prompt[:200])
+        response = self._llm.invoke(prompt)
+        _logger.info("ALIGN_UPDATE_RESPONSE: %s", response.content)
+        return json.loads(response.content)
 
     def create_instances_from_messages(self, messages: List[str], context_messages: List[str]):
         """通过prompt从消息创建实例，消息分配已在prompt中处理"""
@@ -296,12 +291,13 @@ class InstanceGraph:
         return instances_data
 
     def _save_instances_snapshot(self) -> None:
-        """
-        保存实例快照
-        """
+        """保存实例快照到 results/instances/。"""
+        import os
         timestamp = datetime.now().strftime("%Y%m%d")
-        operation = self.filepath
-        filename = f"D:/model/conv/GraphConv/results/instances/instances_snapshot_{operation}_{timestamp}.json"
+        operation = self.filepath or "default"
+        out_dir = os.path.join(os.getcwd(), "results", "instances")
+        os.makedirs(out_dir, exist_ok=True)
+        filename = os.path.join(out_dir, f"instances_snapshot_{operation}_{timestamp}.json")
 
         # snapshot_data = {
         #     "timestamp": datetime.now().isoformat(),
@@ -316,12 +312,13 @@ class InstanceGraph:
         _logger.info(f"实例快照已保存: {filename}")
 
     def _save_instances_edge_snapshot(self) -> None:
-        """
-        保存实例快照
-        """
+        """保存实例边快照到 results/instances/。"""
+        import os
         timestamp = datetime.now().strftime("%Y%m%d")
-        operation = self.filepath
-        filename = f"D:/model/conv/GraphConv/results/instances/edges_snapshot_{operation}_{timestamp}.json"
+        operation = self.filepath or "default"
+        out_dir = os.path.join(os.getcwd(), "results", "instances")
+        os.makedirs(out_dir, exist_ok=True)
+        filename = os.path.join(out_dir, f"edges_snapshot_{operation}_{timestamp}.json")
 
 
         # 保存到JSON文件
@@ -408,8 +405,8 @@ class InstanceGraph:
                             ):
 
         # 3. 在全图中搜索实例，排除已找到的实例
-        relv_ins = self._fetch_instances_by_tfidf(query, top_k_instances, threshold=0.1)
-        return relv_ins
+        relevant_instances_str = self._fetch_instances_by_tfidf(query, top_k_instances, threshold=0.1)
+        return relevant_instances_str
 
     def _fetch_instances_by_tfidf(self, query, top_k_instances, threshold) -> str:
         """
@@ -432,6 +429,7 @@ class InstanceGraph:
         # 从self._all_instances中收集所有实例
         for instance_idx, instance in enumerate(self._all_instances):
             all_instances.append(instance)
+            instance_keys_map[instance_idx] = instance.get("instance_id", f"instance_{instance_idx}")
             _logger.debug(f"用于去构建片段的实例: {instance.get('instance_id', 'unknown')}")
 
             # 为实例的每个片段构建文本表示

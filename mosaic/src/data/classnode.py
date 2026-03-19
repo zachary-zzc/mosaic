@@ -75,11 +75,10 @@ class ClassNode:
     Unclassified: {", ".join(unique_unclassified) if unique_unclassified else "No unclassified"}
     Instances: { ", ".join(instance_names) if instance_names else "No instances"}"""
 
-    #创建一个新的类，只用传入类名即可
     @staticmethod
-    def new_classnode(class_name):
-        class_node_ = ClassNode(class_name=class_name)
-        return class_node_
+    def new_classnode(class_name: str) -> "ClassNode":
+        """创建仅含类名的新类节点。"""
+        return ClassNode(class_name=class_name)
 
    #找到和信息最匹配的实例
     def _fetch_instance(self, message: str, threshold: float, top_k_instance: int = 10000):
@@ -191,75 +190,58 @@ class ClassNode:
             threshold: 相似度阈值，用于判断实例相关性
 
         Returns:
-            Tuple[Dict[Str, List[str]], Dict[ClassNode, Dict[str, List[str]]]]:
-            - 第一个字典: 要更新的实例和对应的消息片段（Instance_id -> 消息列表）
-            - 第二个字典: 要新增的信息片段和关联的类节点，包含分开存储的messages和context_messages
+            Tuple[instance_id_to_messages, unmatched_messages_by_node]:
+            - instance_id_to_messages: 要更新的实例 ID -> 消息列表
+            - unmatched_messages_by_node: 类节点 -> {messages, context_messages}，用于新增实例
         """
-        # 修改：使用实例ID（字符串）作为键，而不是实例对象本身
-        relv_message: Dict[str, List[str]] = {}
-        unmatched_messages: List[str] = []
+        instance_id_to_messages: Dict[str, List[str]] = {}
+        unmatched_message_items: List = []
 
-        # 处理每条消息
-        for msg in messages:
-            # 获取匹配的实例列表
+        for message_item in messages:
             threshold = 1.2
-            message_content = msg['message']
+            message_content = message_item['message']
             matching_instances = self._fetch_instance(message_content, threshold)
 
             if matching_instances:
-                # 遍历每个匹配的实例，将消息分配给每个实例
                 for instance in matching_instances:
-                    # 使用实例ID作为键，而不是实例对象本身
                     instance_id = instance.get('instance_id')
                     if not instance_id:
                         _logger.warning("实例缺少instance_id，跳过处理")
                         continue
-
-                    if instance_id in relv_message:
-                        relv_message[instance_id].append(msg)
+                    if instance_id in instance_id_to_messages:
+                        instance_id_to_messages[instance_id].append(message_item)
                     else:
-                        relv_message[instance_id] = [msg]
+                        instance_id_to_messages[instance_id] = [message_item]
             else:
-                unmatched_messages.append(msg)
+                unmatched_message_items.append(message_item)
 
-        # 构建 unknown_message：根据是否有未匹配消息决定内容
-        separated_messages_dict: Dict[str, List[str]] = {
-            "messages": [],
-            "context_messages": []
-        }
-
-        # 如果有未匹配的消息，则分开存储 messages 和 context_messages
-        if unmatched_messages:
-            # 分开存储两个列表
-            separated_messages_dict["messages"] = messages.copy()  # 存储原始消息
-            separated_messages_dict["context_messages"] = context_messages.copy()  # 存储上下文消息
-
+        separated_messages_dict: Dict[str, List] = {"messages": [], "context_messages": []}
+        if unmatched_message_items:
+            separated_messages_dict["messages"] = messages.copy()
+            separated_messages_dict["context_messages"] = context_messages.copy()
             _logger.info("检测到 %s 条未匹配消息，已分开存储 %s 条消息和 %s 条上下文消息",
-                         len(unmatched_messages), len(messages), len(context_messages))
+                         len(unmatched_message_items), len(messages), len(context_messages))
         else:
-            # 如果没有未匹配的消息，保持空列表
             _logger.info("所有消息都已匹配到现有实例")
 
-        # 构建 unknown_message：当前类节点与分开存储的消息的映射
-        unknown_message: Dict[ClassNode, Dict[str, List[str]]] = {
-            self: separated_messages_dict
-        }
+        unmatched_messages_by_node: Dict[ClassNode, Dict[str, List]] = {self: separated_messages_dict}
 
-        _logger.info("识别到需要更新的实例数量: %s", len(relv_message))
+        _logger.info("识别到需要更新的实例数量: %s", len(instance_id_to_messages))
         _logger.info("识别到需要新增的消息片段数量: %s (关联到类节点: %s)",
-                     len(unmatched_messages), self.class_id)
+                     len(unmatched_message_items), self.class_id)
 
-        return relv_message, unknown_message
+        return instance_id_to_messages, unmatched_messages_by_node
 
-    ##更新实例，通过prompt完成，然后需要让prompt的输出替换现在的实例。
-    def update_relv_instances(self, instances: Dict[str, List[str]]):
+    def update_relevant_instances(self, instance_id_to_messages: Dict[str, List[str]], use_hash: bool = False):
         """
-        更新相关实例，通过prompt完成实例数据的更新
+        更新相关实例，通过 prompt 完成实例数据的更新（或 use_hash 时仅文本拼接）。
 
         Args:
-            instances: 需要更新的实例字典，键为实例对象，值为对应的消息列表
+            instance_id_to_messages: 实例 ID -> 消息列表（消息为 dict，含 'message' 等）
+            use_hash: 若 True 使用 update_data_from_messages_hash，不调用 LLM
         """
-        for instance_id, messages in instances.items():
+        from src.data.instance import update_data_from_messages_hash
+        for instance_id, messages in instance_id_to_messages.items():
             # 在self._instances中查找对应instance_id的实例
             found_index = -1
             existing_instance = None
@@ -273,40 +255,36 @@ class ClassNode:
 
                 if current_id == instance_id:
                     found_index = i
-                    existing_instance = inst
+                    existing_instance = inst if isinstance(inst, dict) else None
                     break
 
             if found_index == -1 or existing_instance is None:
                 _logger.warning(f"未找到实例ID为 {instance_id} 的实例，跳过更新")
                 continue
-            # 根据信息片段更新相关的instance
-            updated_instance = update_data_from_messages(existing_instance, messages)
-
-            # 获取现有的messages列表，如果不存在则创建空列表
-            existing_messages = existing_instance.get('messages', []) if isinstance(existing_instance, dict) else []
-            # 保留原有的创建消息，添加新的更新信息
-            updated_instance['messages'] = existing_messages + messages
-
-            # 替换实例数组中的旧实例
+            if use_hash:
+                updated_instance = update_data_from_messages_hash(existing_instance, messages)
+            else:
+                message_strings = [m.get("message", m) if isinstance(m, dict) else str(m) for m in messages]
+                updated_instance = update_data_from_messages(existing_instance, message_strings)
+                existing_messages = existing_instance.get('messages', []) if isinstance(existing_instance, dict) else []
+                updated_instance['messages'] = existing_messages + messages
             self._instances[found_index] = updated_instance
-        # 更新后重新格式化类
         self._class_formatter_by_instance()
-        _logger.info(f"已完成 {len(instances)} 个实例的更新")
+        _logger.info(f"已完成 {len(instance_id_to_messages)} 个实例的更新")
 
-    def add_instances(self, instances: Dict[ClassNode, Dict[str, List[str]]]):
+    def add_instances(self, unmatched_messages_by_node: Dict[ClassNode, Dict[str, List[str]]], use_hash: bool = False):
         """
-        在当前类节点下新增实例
+        在当前类节点下新增实例。
 
         Args:
-            instances: 包含类节点和对应消息的字典，用于创建新实例
+            unmatched_messages_by_node: 类节点 -> {messages, context_messages}，用于创建新实例
+            use_hash: 若 True 使用 create_instances_from_messages_hash，不调用 LLM
         """
-        curr_instance_count = len(self._instances)
+        from src.data.instance import create_instances_from_messages_hash
+        current_instance_count = len(self._instances)
         instances_added = 0
 
-        # 遍历传入的实例字典
-        for class_node_, messages_dict in instances.items():
-
-            # 获取消息和上下文消息
+        for _class_node, messages_dict in unmatched_messages_by_node.items():
             messages = messages_dict.get("messages", [])
             context_messages = messages_dict.get("context_messages", [])
 
@@ -314,20 +292,20 @@ class ClassNode:
                 _logger.info("没有需要创建实例的消息")
                 continue
 
-            # 创建新实例
-            new_instances = create_instances_from_messages(
-                messages,
-                context_messages,
-                class_node_  # 传入当前class_node
-            )
+            if use_hash:
+                new_instances = create_instances_from_messages_hash(messages, context_messages, _class_node)
+            else:
+                new_instances = create_instances_from_messages(
+                    messages,
+                    context_messages,
+                    _class_node
+                )
 
-            # 为每个新实例分配ID并添加到实例列表
             for instance in new_instances:
-                # 分配新的实例ID（覆盖可能存在的旧ID）
-                instance["instance_id"] = f"instance_{curr_instance_count + 1}"
+                instance["instance_id"] = f"instance_{current_instance_count + 1}"
                 # 将字典实例添加到实例列表
                 self._instances.append(instance)
-                curr_instance_count += 1
+                current_instance_count += 1
                 instances_added += 1
                 _logger.info(f"已创建新实例: {instance['instance_id']} - {instance.get('instance_name', '未命名实例')}")
 
@@ -384,22 +362,18 @@ class ClassNode:
 
 
 
-    #纯增加类和类下面的实例
-    def process_classnode_initialization(self, 
-                                         messages: List[str],
+    def process_classnode_initialization(self,
+                                         messages: List,
                                          context_messages: List[str],
-                                         threshold: float):
-        # process classnode to initialize its attributes and operations
-
-
-        #这里函数复用下，因为对于新增类下面的新增实例也可以用
-        _logger.info(f"创新新节点的信息 {messages}")
-        _logger.info(f"新节点信息的上下文 {context_messages}")
-        _, instances = self.get_message_allocation_from_instance(
-            messages, context_messages, .0)
-        #新增类的时候 只有新增实例
-        assert(len(_) == 0) # all instances should be unknown for new classnode
-        self.add_instances(instances)
+                                         threshold: float,
+                                         use_hash: bool = False) -> None:
+        """根据消息初始化类节点属性与实例；新增类时仅会得到未匹配消息并创建新实例。"""
+        _logger.info("新节点信息: %s", messages)
+        _logger.info("新节点上下文: %s", context_messages)
+        instance_id_to_messages, unmatched_messages_by_node = self.get_message_allocation_from_instance(
+            messages, context_messages, threshold=0.0)
+        assert len(instance_id_to_messages) == 0, "new classnode should have no relevant instances"
+        self.add_instances(unmatched_messages_by_node, use_hash=use_hash)
 
 
 

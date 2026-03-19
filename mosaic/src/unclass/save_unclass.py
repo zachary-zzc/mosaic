@@ -1,10 +1,9 @@
-from glob import glob
+import json
+import os
 
 from src.unclass.graph_unclass import InstanceGraph
-from src.assist import *
+from src.assist import conv_message_splitter, read_to_file_json
 from src.logger import setup_logger
-import json
-import argparse
 _logger = setup_logger("save")
 
 
@@ -21,7 +20,7 @@ def _process_data_truncation(memory: InstanceGraph,
         top_k=None  # 可选，每个信息片段最多匹配的实例数，None 表示匹配所有超过阈值的
     )
 
-    _logger.info(f"relv_msg: {instances_to_update}; unknown_msg: {new_instances}")
+    _logger.info("instances_to_update: %s; new_instances: %s", instances_to_update, new_instances)
 
     #2 处理感知结果（更新旧实例，添加新实例到图）
     memory.process_instances(instances_to_update, new_instances)
@@ -51,7 +50,7 @@ def save(data,conv_name):
         memory = _process_data_truncation(memory, batch, context)
     return memory
 
-import os
+
 def process_single_conv(file_path):
     """处理单个conv文件"""
     print(f"处理文件: {file_path}")

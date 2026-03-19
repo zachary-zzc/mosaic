@@ -1,15 +1,18 @@
 from typing import Any, Dict, List
-from src.llm.llm import load_chat_model
-from string import Template
-from langchain_text_splitters import RecursiveCharacterTextSplitter
 import re
 import json
 import pickle
+
+import numpy as np
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
-import numpy as np
 from sentence_transformers import SentenceTransformer
+from string import Template
+
+from src.llm.llm import load_chat_model
 from src.logger import setup_logger
+from src.utils.constants import DEFAULT_TFIDF_VECTORIZER_PARAMS
+from src.utils import io_utils as _io
 
 _logger = setup_logger("graph assist")
 
@@ -430,11 +433,11 @@ def message_splitter(data):
     return blocks
 
 def format_messages_for_prompt(messages: List[Dict]) -> str:
-    """格式化消息列表，用于插入到提示词中"""
+    """格式化消息列表，用于插入到提示词中。"""
     formatted = []
-    for msg in messages:
-        if "label" in msg and "message" in msg:
-            formatted.append(f"标签{msg['label']}: {msg['message']}")
+    for item in messages:
+        if "label" in item and "message" in item:
+            formatted.append(f"标签{item['label']}: {item['message']}")
     return "\n".join(formatted)
 
 
@@ -452,19 +455,8 @@ def calculate_tfidf_similarity(query, documents, vectorizer_params=None):
         vectorizer: 训练好的TF-IDF向量化器
         tfidf_matrix: 文档的TF-IDF矩阵
     """
-    # 设置默认参数
     if vectorizer_params is None:
-        vectorizer_params = {
-            'lowercase': True,
-            'stop_words': 'english',
-            'ngram_range': (1, 2),
-            'min_df': 1,
-            'max_df': 0.6,
-            'use_idf': True,
-            'smooth_idf': True
-        }
-
-    # 初始化TF-IDF向量化器
+        vectorizer_params = dict(DEFAULT_TFIDF_VECTORIZER_PARAMS)
     vectorizer = TfidfVectorizer(**vectorizer_params)
 
     # 拟合和转换文档文本
@@ -514,44 +506,37 @@ def similarity_score(text1: str, text2: str) -> float:
     cosine_score = calculate_cosine_similarity(text1_vec,text2_vec)
     return cosine_score
 
-def save_to_file_json(file_name,struct):
-    with open(file_name, 'w', encoding='utf-8') as f:
-        json.dump(struct, f, ensure_ascii=False, indent=4)
-
-def read_to_file_json(file_name):
-    with open(file_name, 'r', encoding='utf-8') as f:
-        data = json.load(f)  # 将整个文件解析为 Python 对象（字典/列表）
-    return data
+def save_to_file_json(file_name: str, struct: Any) -> None:
+    """Backward-compatible: write JSON to file."""
+    _io.write_json(file_name, struct, indent=4)
 
 
-def save_to_file(filepath, nodes_data):
-    with open(filepath, 'wb') as f:  # 注意是 'wb' 模式，表示写入二进制文件
-        pickle.dump(nodes_data, f)
+def read_to_file_json(file_name: str) -> Any:
+    """Backward-compatible: read JSON from file."""
+    return _io.read_json(file_name)
 
-def load_graphs(filepath):
-    with open(filepath, "rb") as f:
-        graph = pickle.load(f)
-    return graph
 
-def keywords_process(keywords):
-    # 将(keyword, score)元组列表转换为仅包含关键词字符串的列表
-    keyword_strings = []
-    for keyword_tuple in keywords:
-        if isinstance(keyword_tuple, (list, tuple)) and len(keyword_tuple) >= 2:
-            keyword = keyword_tuple[0]  # 提取关键词字符串
-            # 可选：对关键词进行一些清理
+def save_to_file(filepath: str, nodes_data: Any) -> None:
+    """Backward-compatible: write pickle."""
+    _io.write_pickle(filepath, nodes_data)
+
+
+def load_graphs(filepath: str) -> Any:
+    """Backward-compatible: load graph from pickle."""
+    return _io.read_pickle(filepath)
+
+def keywords_process(keywords: List) -> List[str]:
+    """将 (keyword, score) 元组或字符串列表转为关键词字符串列表。"""
+    result = []
+    for item in keywords:
+        if isinstance(item, (list, tuple)) and len(item) >= 2:
+            keyword = item[0]
             if keyword:
-                # 去除多余空格
-                keyword = keyword.strip()
-                # 可选：将下划线替换为空格（如果您的实例中有下划线格式）
-                keyword = keyword.replace('_', ' ')
-                # 可选：每个单词首字母大写
-                # keyword = keyword.title()
-                keyword_strings.append(keyword)
-        elif isinstance(keyword_tuple, str):
-            # 如果直接是字符串，直接使用
-            keyword_strings.append(keyword_tuple.strip())
-    return keyword_strings
+                keyword = str(keyword).strip().replace("_", " ")
+                result.append(keyword)
+        elif isinstance(item, str) and item.strip():
+            result.append(item.strip())
+    return result
 
 
 

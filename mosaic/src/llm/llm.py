@@ -6,13 +6,10 @@ from langchain.schema import AIMessage, BaseMessage, HumanMessage, SystemMessage
 from langchain_core.outputs import ChatGeneration
 from langchain_core.callbacks.manager import CallbackManagerForLLMRun
 from openai import OpenAI
-import configparser
 
-# Read API keys from config file
-config = configparser.ConfigParser()
-config.read('D:/model/conv/GraphConv/oop_graph/config/config.cfg')
-ali_api_key = config.get('API_KEYS', 'ali_api_key')
-ali_base_url = config.get('API_KEYS', 'ali_base_url')
+from src.config_loader import get_api_key_and_base_url
+
+ali_api_key, ali_base_url = get_api_key_and_base_url()
 
 class CustomChatModel(BaseChatModel):
     """Custom Chat Model that interfaces with a custom server."""

@@ -9,10 +9,22 @@ from typing import Dict, List, Any, Tuple
 from src.data.classnode import ClassNode
 from src.prompts_en import *
 from src.prompts_ch import PROMPT_CONFLICT, PROMPT_TAGS, PROMPT_TAGS_QUERY
-
-from src.assist import *
+from src.assist import (
+    build_class_fragments,
+    build_instance_fragments,
+    calculate_tfidf_similarity,
+    serialize_instance,
+    serialize_instance_kw,
+    serialize_query,
+    keywords_process,
+    fetch_default_llm_model,
+    read_to_file_json,
+    load_graphs,
+)
+from src.utils.constants import DEFAULT_TFIDF_VECTORIZER_PARAMS, TFIDF_KEYWORD_MAX_DF
 from networkx import Graph
 import json
+import pickle
 from keybert import KeyBERT
 from src.logger import setup_logger
 
@@ -30,7 +42,7 @@ class ClassGraph:
         self.name = ""
         self.description = ""
         self.edges = []  #存储边
-        self.message_labels = []  #存储每个信息被分配的标签，外部传入，用于consistency_vaild_dynamic函数
+        self.message_labels = []  # 每条信息被分配的标签，供 consistency_valid_dynamic 使用
         self.warning_items = []  #存储警告信息
 
         self.tags = []  #用来存储每个实例的tags
@@ -62,20 +74,22 @@ class ClassGraph:
                       context: list,
                       tfidf_threshold: float = 0.5,  # TF-IDF相似度阈值
                       top_k_class: int = 3,  # 每个片段最多匹配的类数
+                      use_llm_for_new: bool = True,  # 未匹配片段是否用 LLM 创建新类；False 时归入 Unclassified
                       ) -> tuple[dict[Any, dict[str, Any]], dict[Any, dict[str, Any]]]:
         """
-        混合感知方法：先用TF-IDF匹配现有类，再用LLM创建新类
+        混合感知方法：先用TF-IDF匹配现有类，再用LLM创建新类（或 use_llm_for_new=False 时归入 Unclassified）
 
         Args:
             data: 信息片段列表，每个元素包含'message'和'label'
             context: 背景片段列表
             tfidf_threshold: TF-IDF相似度阈值
             top_k_class: 每个信息片段最多匹配的类数量
+            use_llm_for_new: 未匹配片段是否用 LLM 创建新类；False 时全部归入 "Unclassified"
         """
         # 第一阶段：使用TF-IDF匹配现有类
-        relv_msg = {}  # 需要更新的已有类
+        relevant_class_messages = {}  # 需要更新的已有类: class_id -> {related_message, dependent_context}
         unmatched_data = []  # 未匹配到任何类的信息片段
-        processed_labels = set()  # 已处理的信息片段标签，用于跟踪
+        processed_labels = set()  # 已处理的信息片段标签
 
         for item in data:
             message = item.get("message", "")
@@ -84,7 +98,6 @@ class ClassGraph:
             if label in processed_labels:
                 continue
 
-            # 使用TF-IDF匹配相似类
             tfidf_result = self._sense_classes_by_tfidf(
                 query=message,
                 top_k_class=top_k_class,
@@ -95,147 +108,140 @@ class ClassGraph:
             selected_classes = tfidf_result.get("selected_classes", [])
 
             if selected_classes:
-                # 该信息片段匹配到了一个或多个现有类
                 for class_info in selected_classes:
                     class_id = class_info.get("class_id")
                     if not class_id:
                         continue
 
-                    # 初始化该类在relv_msg中的条目
-                    if class_id not in relv_msg:
-                        relv_msg[class_id] = {
+                    if class_id not in relevant_class_messages:
+                        relevant_class_messages[class_id] = {
                             "related_message": [],
                             "dependent_context": []
                         }
 
-                    # 添加信息片段
-                    relv_msg[class_id]["related_message"].append({
+                    relevant_class_messages[class_id]["related_message"].append({
                         "message": message,
                         "label": label
                     })
 
-                    # # 查找相关的背景片段（可选，可根据需要实现）
-                    # related_context = self._find_relevant_context(message, context)
-                    # if related_context:
-                    #     relv_msg[class_id]["dependent_context"].extend(related_context)
-
                 processed_labels.add(label)
             else:
-                # 该信息片段未匹配到任何现有类
                 unmatched_data.append(item)
 
         _logger.info(
-            f"TF-IDF匹配结果: 匹配到{len(relv_msg)}个类，{len(processed_labels)}个信息片段，{len(unmatched_data)}个片段未匹配")
+            f"TF-IDF匹配结果: 匹配到{len(relevant_class_messages)}个类，{len(processed_labels)}个信息片段，{len(unmatched_data)}个片段未匹配")
 
-        # 第二阶段：对未匹配的片段使用LLM创建新类
-        unknown_msg = {}
+        # 第二阶段：对未匹配的片段使用LLM创建新类，或归入 Unclassified（hash 模式）
+        new_class_messages = {}  # 需要新增的类: class_name -> {related_message, dependent_context}
 
         if unmatched_data:
-            _logger.info(f"对{len(unmatched_data)}个未匹配片段使用LLM创建新类")
+            if use_llm_for_new:
+                _logger.info(f"对{len(unmatched_data)}个未匹配片段使用LLM创建新类")
 
-            # 构建LLM提示词，只处理未匹配的片段
-            sense_prompt = Template(PROMPT_NEW_CLASS_SENSE).substitute(
-                {
-                    "DATA": unmatched_data,  # 只传入未匹配的片段
-                    "CONTEXT": context
-                }
-            )
-
-            _logger.info(f"LLM感知提示词: {sense_prompt}")
-
-            response = self._llm.invoke(sense_prompt)
-            _logger.info(f"LLM感知响应: {response.content}")
-            result = json.loads(response.content)
-
-            # 处理LLM返回的新类
-            new_classes = result.get("new_classes", [])
-            if not isinstance(new_classes, list):
-                new_classes = []
-
-            for item in new_classes:
-                class_name = item.get("class_name")
-                if class_name:
-                    unknown_msg[class_name] = {
-                        "related_message": item.get("related_message", []),
-                        "dependent_context": item.get("dependent_context", [])
+                # 构建LLM提示词，只处理未匹配的片段
+                sense_prompt = Template(PROMPT_NEW_CLASS_SENSE).substitute(
+                    {
+                        "DATA": unmatched_data,  # 只传入未匹配的片段
+                        "CONTEXT": context
                     }
-        _logger.info(f"最终结果: 需要更新的相关类: {len(relv_msg)}个, 需要新增的新类: {len(unknown_msg)}个")
-        return relv_msg, unknown_msg
+                )
 
-    ##处理和新信息相关的类，相关的信息片段需要更新类下面的部分实例或者在相关类下面新增实例。
-    def process_relvclass_instances(self,
-                                    relv_classes_msg: Dict[str, Dict[str, List[str]]],
-                                    threshold: float = 0.9
-                                    ) -> list[ClassNode]:
+                _logger.info(f"LLM感知提示词: {sense_prompt}")
+
+                response = self._llm.invoke(sense_prompt)
+                _logger.info(f"LLM感知响应: {response.content}")
+                result = json.loads(response.content)
+
+                # 处理LLM返回的新类
+                new_classes = result.get("new_classes", [])
+                if not isinstance(new_classes, list):
+                    new_classes = []
+
+                for item in new_classes:
+                    class_name = item.get("class_name")
+                    if class_name:
+                        new_class_messages[class_name] = {
+                            "related_message": item.get("related_message", []),
+                            "dependent_context": item.get("dependent_context", [])
+                        }
+            else:
+                # Hash 模式：全部归入 Unclassified，不调用 LLM
+                _logger.info(f"Hash 模式: 将{len(unmatched_data)}个未匹配片段归入 Unclassified")
+                related = [{"message": item.get("message", ""), "label": item.get("label", "")} for item in unmatched_data]
+                new_class_messages["Unclassified"] = {
+                    "related_message": related,
+                    "dependent_context": context if isinstance(context, list) else ([context] if context else []),
+                }
+        _logger.info(f"最终结果: 需要更新的相关类: {len(relevant_class_messages)}个, 需要新增的新类: {len(new_class_messages)}个")
+        return relevant_class_messages, new_class_messages
+
+    def process_relevant_class_instances(self,
+                                         relevant_class_messages: Dict[str, Dict[str, List[str]]],
+                                         threshold: float = 0.9,
+                                         use_hash: bool = False,
+                                         ) -> list[ClassNode]:
         """
-        处理相关类中的实例，根据阈值筛选相关实例和未知实例
+        处理相关类中的实例，根据阈值筛选相关实例和未知实例。
 
         Args:
-            relv_classes: 从sense_classes返回的相关类字典，包含类ID和对应的消息
+            relevant_class_messages: 从 sense_classes 返回的相关类字典，class_id -> {related_message, dependent_context}
             threshold: 相似度阈值，用于判断实例相关性
+            use_hash: 若 True 使用 hash 路径更新/新增实例，不调用 LLM
         """
         processed_classes = []
 
-        for class_id, messages_dict in relv_classes_msg.items():
-            # 通过类ID找到对应的类节点
+        for class_id, messages_dict in relevant_class_messages.items():
             class_node = self.get_classnode(class_id)
             if class_node is None:
                 _logger.warning(f"找不到对应的类节点: {class_id}")
                 continue
 
-            # 提取相关消息和上下文消息
-            relv_messages = messages_dict.get("related_message", [])
+            related_messages = messages_dict.get("related_message", [])
             context_messages = messages_dict.get("dependent_context", [])
 
-            relv_instances, unknown_instances = class_node.get_message_allocation_from_instance(
-                relv_messages, context_messages, threshold)
+            relevant_instance_messages, new_instance_messages = class_node.get_message_allocation_from_instance(
+                related_messages, context_messages, threshold)
 
-            # 更新类的实例
-            class_node.update_relv_instances(relv_instances)
-            # 在该类下面新增实例
-            class_node.add_instances(unknown_instances)
+            class_node.update_relevant_instances(relevant_instance_messages, use_hash=use_hash)
+            class_node.add_instances(new_instance_messages, use_hash=use_hash)
 
             processed_classes.append(class_node)
 
             _logger.info(f"Processed class {class_id}: "
-                         f"found {len(relv_instances)} relevant instances, "
-                         f"{len(unknown_instances)} new instances")
+                         f"found {len(relevant_instance_messages)} relevant instances, "
+                         f"{len(new_instance_messages)} new instances")
         self.save_graph_snapshot()
         return processed_classes
 
     ##对于第一步感知出来的需要新创建的类，去对这些类进行实例的创建和类节点创建和类id的分配。
-    def add_classnodes(self,
-                       classnodesmsg: Dict[str, Dict[str, List[str]]]):
+    def add_classnodes(self, new_class_messages: Dict[str, Dict[str, List[str]]], use_hash: bool = False) -> list[ClassNode]:
         """
-        对于第一步感知出来的需要新创建的类，去对这些类进行实例的创建和类节点创建和类id的分配。
+        对 sense_classes 得到的新类创建类节点与实例，并分配 class_id。
 
         Args:
-            classnodes: 从sense_classes返回的新类字典，包含类名和对应的消息片段
+            new_class_messages: 新类字典，class_name -> {related_message, dependent_context}
+            use_hash: 若 True 使用 hash 路径创建实例，不调用 LLM
         """
-        curr_class_count = len(self.graph.nodes)
-        new_classes = []
-        # 遍历新类字典，键现在是类名字符串，值包含相关信息
-        for class_name, content in classnodesmsg.items():
-            # 创建新的ClassNode对象
-            classnode = ClassNode.new_classnode(class_name)
-            # 分配类ID
-            class_id = f"class_{curr_class_count + 1}"
-            classnode.class_id = class_id
+        current_class_count = len(self.graph.nodes)
+        added_class_nodes = []
+        for class_name, content in new_class_messages.items():
+            class_node = ClassNode.new_classnode(class_name)
+            class_id = f"class_{current_class_count + 1}"
+            class_node.class_id = class_id
 
-            # 处理类节点的初始化，创建实例
-            classnode.process_classnode_initialization(
+            class_node.process_classnode_initialization(
                 content.get("related_message", []),
                 content.get("dependent_context", []),
-                threshold=0
+                threshold=0,
+                use_hash=use_hash,
             )
-            # 将类节点添加到图中
-            self.graph.add_node(classnode)
+            self.graph.add_node(class_node)
             _logger.info(f"Added new class {class_id}: {class_name}")
-            curr_class_count += 1
-            new_classes.append(classnode)
+            current_class_count += 1
+            added_class_nodes.append(class_node)
 
         self.save_graph_snapshot()
-        return new_classes
+        return added_class_nodes
 
     def save_graph_snapshot(self) -> None:
         """
@@ -406,25 +412,23 @@ class ClassGraph:
     def message_passing(self):
         pass
 
-    def consistency_vaild_dynamic(self, relv_msg, unknown_msg):
+    def consistency_valid_dynamic(self, relevant_class_messages: dict, new_class_messages: dict) -> dict:
         """
-        分类已有类和新增类的信息，不进行冲突检查，只做好信息分组
+        分类已有类和新增类的信息，不进行冲突检查，只做好信息分组。
 
         Args:
-            relv_msg: 与已有类相关的信息字典
-            unknown_msg: 需要新增的类相关信息字典
+            relevant_class_messages: 与已有类相关的信息字典，class_id -> {related_message, dependent_context}
+            new_class_messages: 需要新增的类相关信息字典，class_name -> {related_message, dependent_context}
 
         Returns:
-            dict: 包含分类信息的字典，仅包含已有类和新增类的分组信息
+            包含 existing_classes 与 new_classes 的 classified_data
         """
         classified_data = {
             "existing_classes": {},
             "new_classes": {}
         }
 
-        # 1. 分类已有类（relv_msg）的信息
-        for class_id, class_info in relv_msg.items():
-            # 在graph nodes中查找对应的类节点
+        for class_id, class_info in relevant_class_messages.items():
             target_class = None
             for class_node in self.graph.nodes:
                 if class_node.class_id == class_id:
@@ -446,10 +450,9 @@ class ClassGraph:
 
             # 收集该类已有实例的信息标签，并转换为包含完整消息的格式
             if hasattr(target_class, '_instances') and target_class._instances:
-                # 创建标签到消息的映射字典，便于快速查找
                 label_to_message = {}
-                for msg_item in self.message_labels:
-                    label_to_message[msg_item['label']] = msg_item['message']
+                for item in self.message_labels:
+                    label_to_message[item['label']] = item['message']
 
                 # 收集所有实例的标签并去重
                 all_label_ids = set()
@@ -469,8 +472,7 @@ class ClassGraph:
 
             classified_data["existing_classes"][class_id] = class_data
 
-        # 2. 分类新增类（unknown_msg）的信息
-        for class_name, class_info in unknown_msg.items():
+        for class_name, class_info in new_class_messages.items():
             new_class_data = {
                 "class_name": class_name,
                 "new_messages": class_info.get("related_message", []),
@@ -519,12 +521,9 @@ class ClassGraph:
                         for conflict in result.get("conflicts", []):
                             conflict_labels.update(conflict.get("conflict_message_labels", []))
 
-                        # 只筛选出冲突相关的消息
-                        conflict_messages = []
-
-                        for msg in all_messages:
-                            if msg.get("label") in conflict_labels:
-                                conflict_messages.append(msg)
+                        conflict_messages = [
+                            m for m in all_messages if m.get("label") in conflict_labels
+                        ]
                         items = {
                             "class_id": class_data.get("class_id", class_id),
                             "class_name": class_data.get("class_name", f"未命名类别_{class_id}"),
@@ -559,11 +558,9 @@ class ClassGraph:
                         for conflict in result.get("conflicts", []):
                             conflict_labels.update(conflict.get("conflict_message_labels", []))
 
-                        # 只筛选出冲突相关的消息
-                        conflict_messages = []
-                        for msg in messages:
-                            if msg.get("label") in conflict_labels:
-                                conflict_messages.append(msg)
+                        conflict_messages = [
+                            m for m in messages if m.get("label") in conflict_labels
+                        ]
 
                         items = {
                             "class_id": class_data.get("class_id", class_name),
@@ -575,9 +572,10 @@ class ClassGraph:
                         }
                         self.warning_items.append(items)
 
-        debug_filename = "D:/model/conv/GraphConv/oop_graph/src/error_case/conflict/warning_items.json"
+        debug_dir = os.path.join(os.getcwd(), "results", "conflict")
+        os.makedirs(debug_dir, exist_ok=True)
+        debug_filename = os.path.join(debug_dir, "warning_items.json")
         with open(debug_filename, 'w', encoding='utf-8') as f:
-            # 简化输出，避免循环引用
             json.dump(self.warning_items, f, indent=2, ensure_ascii=False)
 
     #用llm的方式去搜索
@@ -587,15 +585,12 @@ class ClassGraph:
                            top_k_class=3,
                            top_k_instances=7,
                            ):
-        # 重置已选实例集合
         self.selected_instance_keys.clear()
-        # 1. 在指定类中搜索实例
-        rel_tag = self.find_kw_relvinstance_tags(query)
+        keyword_matched_str = self.find_keyword_relevant_instance_tags(query)
         sensed_classes = self._sense_classes_by_llm(query, llm, top_k_class)
-        relevant_instances = self._fetch_instances_by_tfidf(query, top_k_instances, threshold=0.5,
-                                                            classes=sensed_classes)
-        # 3. 合并结果
-        combined_instances = rel_tag + relevant_instances
+        _, instances_in_classes_str = self._fetch_instances_by_tfidf(query, top_k_instances, threshold=0.5,
+                                                                     classes=sensed_classes)
+        combined_instances = keyword_matched_str + instances_in_classes_str
         # 4. 清空已选实例集合，为下一次搜索做准备
         self.selected_instance_keys.clear()
 
@@ -630,18 +625,15 @@ class ClassGraph:
         #     combo_top_k=7
         # )
 
-        # 2. 在指定类中搜索实例, 排除已经找到的实例
         sensed_classes = self._sense_classes_by_tfidf(query, top_k_class, threshold=0.6, allow_below_threshold=True)
-        len1, relevant_instances = self._fetch_instances_by_tfidf(query, top_k_instances, threshold=0.5,
-                                                            classes=sensed_classes)
-        _logger.info(f"第一阶段选择实例数量{len1}")
+        count_in_classes, instances_in_classes_str = self._fetch_instances_by_tfidf(
+            query, top_k_instances, threshold=0.5, classes=sensed_classes)
+        _logger.info(f"第一阶段选择实例数量: {count_in_classes}")
 
-        # 3. 在全图中搜索实例，排除已找到的实例
-        len2, relv_ins = self._fetch_instances_by_tfidf(query, top_k_instances, threshold=0.1)
+        count_global, instances_global_str = self._fetch_instances_by_tfidf(
+            query, top_k_instances, threshold=0.1)
 
-        # 4. 合并结果
-        # 确保都是列表
-        combined_instances =relv_ins + relevant_instances
+        combined_instances = instances_global_str + instances_in_classes_str
         #combined_instances = kw_coverage_instances + relv_ins + relevant_instances
 
         # 5. 清空已选实例集合，为下一次搜索做准备
@@ -748,20 +740,10 @@ class ClassGraph:
         _logger.info(f"TF-IDF类感知: 总共收集到 {len(class_nodes)} 个类，{len(class_fragments)} 个片段")
 
         # 2. 使用TF-IDF进行向量化和相似度计算
-        vectorizer_params = {
-            'lowercase': True,
-            'stop_words': 'english',
-            'ngram_range': (1, 2),  # 包含1-gram和2-gram
-            'min_df': 1,
-            'max_df': 0.6,
-            'use_idf': True,
-            'smooth_idf': True
-        }
-
         similarities, vectorizer, tfidf_matrix = calculate_tfidf_similarity(
             query,
             class_fragments,
-            vectorizer_params=vectorizer_params
+            vectorizer_params=dict(DEFAULT_TFIDF_VECTORIZER_PARAMS)
         )
 
         # 3. 为每个类找出最高相似度的片段
@@ -1176,7 +1158,63 @@ class ClassGraph:
             "instance_id": instance_id
         }
 
-    def find_kw_relvinstance_tags(self, query) -> str:
+    def generate_tags_tfidf(self, filepath: str, top_n: int = 10) -> None:
+        """
+        仅用 TF-IDF 为图中每个实例生成关键词 tags（不调用 KeyBERT/LLM），并写入 filepath，同时设置 self.tags。
+        """
+        from sklearn.feature_extraction.text import TfidfVectorizer
+        from src.utils.constants import DEFAULT_TFIDF_VECTORIZER_PARAMS
+
+        tags = []
+        doc_list = []
+        meta = []  # (class_id, instance_id) per doc
+
+        for class_node in self.graph.nodes:
+            class_id = getattr(class_node, "class_id", "")
+            for instance in getattr(class_node, "_instances", []):
+                if not isinstance(instance, dict):
+                    continue
+                text = serialize_instance_kw(instance)
+                if not text or not text.strip():
+                    text = " "
+                doc_list.append(text)
+                meta.append((class_id, instance.get("instance_id", "unknown")))
+
+        if not doc_list:
+            _logger.warning("图中无实例，跳过 tags 生成")
+            self.tags = []
+            if filepath:
+                os.makedirs(os.path.dirname(os.path.abspath(filepath)) or ".", exist_ok=True)
+                with open(filepath, "w", encoding="utf-8") as f:
+                    json.dump([], f, indent=2, ensure_ascii=False)
+            return
+
+        params = dict(DEFAULT_TFIDF_VECTORIZER_PARAMS)
+        vectorizer = TfidfVectorizer(**params)
+        X = vectorizer.fit_transform(doc_list)
+        feature_names = vectorizer.get_feature_names_out()
+
+        for i, (class_id, instance_id) in enumerate(meta):
+            row = X.getrow(i)
+            if row.nnz == 0:
+                keywords = []
+            else:
+                scores = row.toarray().flatten()
+                top_idx = scores.argsort()[-top_n:][::-1]
+                keywords = [
+                    feature_names[j] for j in top_idx
+                    if scores[j] > 0 and feature_names[j].strip()
+                ][:top_n]
+            tags.append({"class_id": class_id, "instance_id": instance_id, "keywords": keywords})
+
+        self.tags = tags
+        if filepath:
+            os.makedirs(os.path.dirname(os.path.abspath(filepath)) or ".", exist_ok=True)
+            with open(filepath, "w", encoding="utf-8") as f:
+                json.dump(tags, f, indent=2, ensure_ascii=False)
+        _logger.info("已生成 %s 条 TF-IDF tags 并写入 %s", len(tags), filepath)
+
+    def find_keyword_relevant_instance_tags(self, query: str) -> str:
         tags_data = self.tags
         excluded_count = 0
         all_instance_info = []  # 存储所有实例的信息
@@ -1227,24 +1265,20 @@ class ClassGraph:
 
         _logger.info(f"已将 {added_instance_count} 个实例添加到已选实例集合中")
 
-        # 根据返回的class_id和instance_id查找完整实例数据
-        relv_instances = []
+        relevant_instances = []
         for instance_info in instances_data:
             class_id = instance_info.get('class_id')
             instance_id = instance_info.get('instance_id')
-
-            # 在知识图谱中查找对应的实例
             found_instance = self._find_instance_by_ids(class_id, instance_id)
             if found_instance:
-                relv_instances.append(found_instance)
+                relevant_instances.append(found_instance)
             else:
                 _logger.warning(f"Instance not found: class_id={class_id}, instance_id={instance_id}")
 
-        _logger.info(f"Found {len(relv_instances)} relevant instances")
-        # print(serialize_instance(relv_instances))
-        return serialize_instance(relv_instances)
+        _logger.info(f"Found {len(relevant_instances)} relevant instances")
+        return serialize_instance(relevant_instances)
 
-    def find_kw_coverage_instances_with_tfidf(self, query_keywords, similarity_threshold=0.1,
+    def find_keyword_coverage_instances_with_tfidf(self, query_keywords, similarity_threshold=0.1,
                                               single_top_k=7, combo_top_k=3) -> str:
         """
         基于TF-IDF相似度的关键词覆盖实例检索方法
@@ -1325,16 +1359,8 @@ class ClassGraph:
         keyword_docs = list(all_keywords_set)
         query_docs = query_keywords
 
-        # 使用自定义参数，注意原代码中max_df=0.7
-        vectorizer_params = {
-            'lowercase': True,
-            'stop_words': 'english',
-            'ngram_range': (1, 2),
-            'min_df': 1,
-            'max_df': 0.7,  # 原代码中max_df=0.7
-            'use_idf': True,
-            'smooth_idf': True
-        }
+        vectorizer_params = dict(DEFAULT_TFIDF_VECTORIZER_PARAMS)
+        vectorizer_params["max_df"] = TFIDF_KEYWORD_MAX_DF
 
         # 计算每个查询关键词与所有关键词的相似度
         similarity_matrix = []

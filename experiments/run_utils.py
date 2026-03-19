@@ -17,6 +17,8 @@ LOCOMO_CONV_DIR = os.path.join(MOSAIC_SRC, LOCOMO_BASE, "conv")
 LOCOMO_QA_DIR = os.path.join(MOSAIC_SRC, LOCOMO_BASE, "qa")
 LOCOMO_GRAPH_DIR = os.path.join(MOSAIC_SRC, LOCOMO_BASE, "graph")
 LOCOMO_TAGS_DIR = os.path.join(MOSAIC_SRC, LOCOMO_BASE, "tags")
+# example/Locomo 数据（conv0 + qa_0 等）
+EXAMPLE_LOCOMO_DIR = os.path.join(PROJECT_ROOT, "example", "Locomo")
 
 
 def setup_mosaic_path():
@@ -53,6 +55,55 @@ def get_locomo_conv_files():
     pattern = os.path.join(LOCOMO_CONV_DIR, "locomo_conv*.json")
     files = sorted(glob.glob(pattern))
     return files
+
+
+def get_locomo_example_pairs():
+    """
+    返回 example/Locomo 下的 (conv_path, qa_path) 列表。
+    约定：locomo_conv0.json 对应 qa_0.json，按文件名数字匹配。
+    """
+    pairs = []
+    if not os.path.isdir(EXAMPLE_LOCOMO_DIR):
+        return pairs
+    conv_pattern = os.path.join(EXAMPLE_LOCOMO_DIR, "locomo_conv*.json")
+    for conv_path in sorted(glob.glob(conv_pattern)):
+        base = os.path.basename(conv_path)
+        # locomo_conv0.json -> 0, locomo_conv1.json -> 1
+        try:
+            num = base.replace("locomo_conv", "").replace(".json", "").strip()
+            if not num:
+                num = "0"
+            qa_path = os.path.join(EXAMPLE_LOCOMO_DIR, f"qa_{num}.json")
+            if os.path.isfile(qa_path):
+                pairs.append((conv_path, qa_path))
+        except Exception:
+            continue
+    return pairs
+
+
+def build_locomo_graph_hash(conv_path, out_dir, conv_name=None):
+    """
+    从 conv JSON 用 hash 方式构图并生成 tags，写入 out_dir。
+    返回 (graph_pkl_path, tags_json_path)。
+    需在 setup_mosaic_path() 之后、mosaic src 下调用。
+    """
+    import json
+    from src.save import save_hash
+
+    with open(conv_path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    name = conv_name or os.path.basename(conv_path).replace("locomo_", "").replace(".json", "conv")
+    os.makedirs(out_dir, exist_ok=True)
+    graph_path = os.path.join(out_dir, "graph.pkl")
+    tags_path = os.path.join(out_dir, "tags.json")
+    save_hash(
+        data,
+        name,
+        graph_save_dir=out_dir,
+        final_graph_path=graph_path,
+        final_tags_path=tags_path,
+    )
+    return graph_path, tags_path
 
 
 def ensure_results_dir(experiment_name: str) -> str:

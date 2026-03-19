@@ -61,6 +61,45 @@ def update_data_from_messages(instance,messages: List[str]):
 
     return updated_instances
 
+
+def update_data_from_messages_hash(instance: Dict, messages: List) -> Dict:
+    """仅用文本拼接更新实例，不调用 LLM。将新消息追加到 uninstance_field。"""
+    msg_strs = [m.get("message", m) if isinstance(m, dict) else str(m) for m in messages]
+    existing = instance.get("uninstance_field", "") or ""
+    new_text = "\n".join(msg_strs)
+    updated = dict(instance)
+    updated["uninstance_field"] = (existing + "\n" + new_text).strip() if existing else new_text
+    existing_labels = list(instance.get("message_labels", []))
+    new_labels = [m.get("label") for m in messages if isinstance(m, dict) and m.get("label") is not None]
+    updated["message_labels"] = existing_labels + new_labels
+    return updated
+
+
+def create_instances_from_messages_hash(
+    messages: List,
+    context_messages: List,
+    class_node: Any,
+) -> List[Dict]:
+    """仅用文本拼接创建实例，不调用 LLM。每条消息或整批作为一个实例的 uninstance_field。"""
+    if not messages:
+        return []
+    # 整批作为一个实例，便于 TF-IDF 检索
+    msg_strs = [m.get("message", m) if isinstance(m, dict) else str(m) for m in messages]
+    labels = [m.get("label") for m in messages if isinstance(m, dict)]
+    text = "\n".join(msg_strs)
+    if context_messages:
+        ctx_strs = [c if isinstance(c, str) else str(c) for c in context_messages]
+        text = "\n".join(ctx_strs) + "\n" + text
+    instance = {
+        "instance_id": None,  # 由 add_instances 填充
+        "instance_name": getattr(class_node, "class_name", "Unclassified") + " instance",
+        "attributes": {},
+        "operations": {},
+        "uninstance_field": text,
+        "message_labels": labels or [],
+    }
+    return [instance]
+
 # 构建新增实例的prompt，使用全部相关信息而非仅未使用部分
 def create_instances_from_messages(messages: List[str],
                                    context_messages: List[str],
