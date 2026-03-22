@@ -11,6 +11,7 @@ stdout：任务控制信息 + 子进程继承的 tqdm/输出。
   conda activate mosaic
   python run.py
   python run.py --verbose-log
+  python run.py --hash
   python run.py --paths /path/to/paths.json
 
 后台:
@@ -82,6 +83,11 @@ def main() -> None:
         "--verbose-log",
         action="store_true",
         help="将详细运行参数写入 log/run_verbose.log；并传给 mosaic build -v",
+    )
+    parser.add_argument(
+        "--hash",
+        action="store_true",
+        help="仅 TF-IDF/hash 构图（mosaic build --hash），不调用 LLM 建新类",
     )
     args = parser.parse_args()
 
@@ -165,6 +171,8 @@ def main() -> None:
             str(log_dir / "conv0_progress.txt"),
         ]
     )
+    if args.hash:
+        cmd.append("--hash")
 
     env = os.environ.copy()
     env["PYTHONPATH"] = str(repo)

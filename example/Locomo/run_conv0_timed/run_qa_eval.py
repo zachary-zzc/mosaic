@@ -90,12 +90,15 @@ def main() -> int:
         set_graph_snapshots_dir=False,
     )
 
-    mosaic_src = repo / "mosaic" / "src"
-    if str(mosaic_src) not in sys.path:
-        sys.path.insert(0, str(mosaic_src))
+    mosaic_root = repo / "mosaic"
+    mosaic_src = mosaic_root / "src"
+    # 与 mosaic/cli.py、experiments/run_utils.setup_mosaic_path 一致：src.* 导入需 mosaic 在 PYTHONPATH 上
+    for p in (mosaic_root, mosaic_src):
+        if str(p) not in sys.path:
+            sys.path.insert(0, str(p))
     os.chdir(mosaic_src)
 
-    from query import process_single_qa
+    from src.query import process_single_qa
 
     out_full = results_dir / "qa_0_eval_full.json"
     out_summary = results_dir / "qa_0_eval_summary.json"
