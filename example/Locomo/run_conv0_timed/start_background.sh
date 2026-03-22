@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 使用极小数据集（data_mini）后台跑通：1) 构图 2) 单条 query 冒烟 3) 全量 QA 评测（作答+LLM 评判+统计）
+# 使用极小数据集（data_mini）后台跑通：1) TF-IDF/hash 构图 2) 单条 query 冒烟（hash）3) 全量 QA 评测（作答+LLM 评判+统计）
 # 日志：控制信息 -> log/task_stdout.log；mosaic 详情 -> log_mini/mosaic_server.log、log_mini/qa_eval.log
 set -euo pipefail
 RUN_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -23,18 +23,18 @@ nohup bash -lc "
   cd \"$RUN_DIR\"
   export PYTHONPATH=\"$REPO\"
 
-  echo \"========== [1/3] 构图（mini: data_mini/locomo_conv0_mini.json）==========\"
-  python run.py --verbose-log --paths \"$PATHS_MINI\"
+  echo \"========== [1/3] 构图（hash 启发式，mini: data_mini/locomo_conv0_mini.json）==========\"
+  python run.py --verbose-log --hash --paths \"$PATHS_MINI\"
 
-  echo \"========== [2/3] 单条查询冒烟（mosaic query, method=llm）==========\"
+  echo \"========== [2/3] 单条查询冒烟（mosaic query, method=hash）==========\"
   python -m mosaic query \\
     --graph-pkl \"$RUN_DIR/artifacts_mini/graph_network_conv0.pkl\" \\
     --tags-json \"$RUN_DIR/artifacts_mini/conv0_tags.json\" \\
-    --method llm \\
+    --method hash \\
     --question \"What is Caroline's identity?\"
 
   echo \"========== [3/3] QA 评测：逐题检索+作答 + LLM 评判 + 分类/整体统计 ==========\"
-  python run_qa_eval.py --paths \"$PATHS_MINI\" --method llm
+  python run_qa_eval.py --paths \"$PATHS_MINI\" --method hash
 
   echo \"========== 全部完成 ==========\"
   echo \"图/tags: $RUN_DIR/artifacts_mini/\"

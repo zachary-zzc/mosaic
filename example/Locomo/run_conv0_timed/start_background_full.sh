@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 仅全量 conv0 构图（paths.json），不跑 QA。与旧版 start_background 行为一致。
+# 仅全量 conv0 构图（paths.json，TF-IDF/hash 启发式），不跑 QA。
 set -euo pipefail
 RUN_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$RUN_DIR"
@@ -16,7 +16,7 @@ nohup bash -lc "
   source \"$CONDA_BASE/etc/profile.d/conda.sh\"
   conda activate mosaic
   cd \"$RUN_DIR\"
-  python run.py --verbose-log
+  python run.py --verbose-log --hash
 " >> log/task_stdout.log 2>&1 &
 
 echo $! > log/run.pid
