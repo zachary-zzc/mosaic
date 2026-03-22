@@ -5,10 +5,40 @@ from src.prompts_en import PROMPT_CREATE_INSTANCE, PROMPT_UPDATE_INSTANCE
 #from src.prompts import PROMPT_CREATE_INSTANCE,PROMPT_UPDATE_INSTANCE
 
 from src.logger import setup_logger
-import json
+from src.utils.io_utils import parse_llm_json_value
 
 _logger = setup_logger("instance cudr")
 _llm = fetch_default_llm_model()
+
+# DashScope 兼容模式 JSON Mode：https://help.aliyun.com/zh/model-studio/json-mode
+_DASHSCOPE_JSON_OBJECT = {"type": "json_object"}
+
+
+def _invoke_json_object(prompt: str):
+    """百炼 json_object 要求 messages 含「json」字样，且根节点须为 JSON 对象。"""
+    return _llm.invoke(prompt, response_format=_DASHSCOPE_JSON_OBJECT)
+
+
+def _payload_from_json_object(content: str) -> Any:
+    """解析 json_object 模式返回的文本；兼容围栏与非严格 JSON（与 mosaic 其它 LLM 解析一致）。"""
+    if not (content or "").strip():
+        raise ValueError("LLM 返回空内容，无法解析 JSON")
+    parsed = parse_llm_json_value(content)
+    if parsed is not None:
+        return parsed
+    raise ValueError("LLM 返回无法解析为 JSON 对象或数组")
+
+
+def _normalize_instances_list(parsed: Any) -> List[Dict[str, Any]]:
+    """兼容 {\"instances\": [...]} 与历史上的顶层数组。"""
+    if isinstance(parsed, list):
+        return [x for x in parsed if isinstance(x, dict)]
+    if isinstance(parsed, dict):
+        if "instances" in parsed and isinstance(parsed["instances"], list):
+            return [x for x in parsed["instances"] if isinstance(x, dict)]
+        if "instance_name" in parsed or "attributes" in parsed:
+            return [parsed]
+    raise ValueError(f"无法从 LLM 结果解析实例列表: {type(parsed).__name__}")
 
 
 class Instance:
@@ -54,10 +84,12 @@ def update_data_from_messages(instance,messages: List[str]):
         instance=instance
     )
 
-    _logger.info(f"ALIGN_UPDATE_PROMPT: {align_update_prompt}")
-    response = _llm.invoke(align_update_prompt)
-    _logger.info(f"ALIGN_UPDATE_RESPONSE: {response.content}")
-    updated_instances=json.loads(response.content)
+    _logger.debug("ALIGN_UPDATE_PROMPT: %s", align_update_prompt)
+    response = _invoke_json_object(align_update_prompt)
+    _logger.debug("ALIGN_UPDATE_RESPONSE: %s", response.content)
+    updated_instances = _payload_from_json_object(response.content)
+    if not isinstance(updated_instances, dict):
+        raise ValueError("更新实例期望 JSON 对象（单条实例），得到: %s" % type(updated_instances).__name__)
 
     return updated_instances
 
@@ -105,7 +137,7 @@ def create_instances_from_messages(messages: List[str],
                                    context_messages: List[str],
                                    class_node):
     # create instances from messages using LLM or other methods
-    _logger.info(f"Creating instances from messages: {class_node}")
+    _logger.debug("Creating instances from messages: %s", class_node)
     # 从class_node提取信息构建class_info字典
     class_info = _extract_class_info_from_node(class_node)
 
@@ -115,12 +147,12 @@ def create_instances_from_messages(messages: List[str],
         context_messages="\n".join([f"- {msg}" for msg in context_messages])
     )
 
-    _logger.info(f"ALIGN_ADD_PROMPT: {align_add_prompt}")
-    response = _llm.invoke(align_add_prompt)
-    _logger.info(f"ALIGN_ADD_RESPONSE: {response.content}")
+    _logger.debug("ALIGN_ADD_PROMPT: %s", align_add_prompt)
+    response = _invoke_json_object(align_add_prompt)
+    _logger.debug("ALIGN_ADD_RESPONSE: %s", response.content)
 
-    # 解析LLM返回的实例信息
-    instances_data = json.loads(response.content)
+    parsed = _payload_from_json_object(response.content)
+    instances_data = _normalize_instances_list(parsed)
     return instances_data
 
 
@@ -159,7 +191,7 @@ def _extract_class_info_from_node(class_node) -> Dict[str, Any]:
     # if instances and len(instances) > 0:
     #     class_info["instance_count"] = len(instances)
 
-    _logger.info(f"Extracted class info: {class_info}")
+    _logger.debug("Extracted class info: %s", class_info)
     return class_info
 
 

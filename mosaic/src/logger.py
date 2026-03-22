@@ -19,34 +19,47 @@ class InMemoryLogHandler(logging.Handler):
 
 def setup_logger(name: str) -> logging.Logger:
     """
-    Set up and return a logger that outputs both to the console and to a file
-    (server.log on the Desktop/log folder).
+    设置 logger：文件始终 DEBUG（prompt、TF-IDF 细节、节点变更等）。
+    控制台：
+      - 未设 MOSAIC_VERBOSE=1 且未显式覆盖时：WARNING（避免刷屏；构图进度请用 tqdm 或进度文件）
+      - MOSAIC_VERBOSE=1：DEBUG（与 --verbose 一致）
+      - MOSAIC_CONSOLE_MIN_LEVEL 优先于上述规则（兼容服务器脚本）
     """
     logger = logging.getLogger(name)
-    logger.setLevel(logging.INFO)
+    logger.setLevel(logging.DEBUG)
 
     if not logger.handlers:
-        # Console output.
-        ch = logging.StreamHandler()
-        ch.setLevel(logging.INFO)
         formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+
+        ch = logging.StreamHandler()
+        min_console = os.environ.get("MOSAIC_CONSOLE_MIN_LEVEL", "").strip().upper()
+        if min_console and hasattr(logging, min_console):
+            ch.setLevel(getattr(logging, min_console))
+        elif os.environ.get("MOSAIC_VERBOSE") == "1":
+            ch.setLevel(logging.DEBUG)
+        else:
+            ch.setLevel(logging.WARNING)
         ch.setFormatter(formatter)
         logger.addHandler(ch)
 
-        # File output: prefer project-relative log dir (e.g. mosaic/log or cwd/log)
+        # 文件：记录 DEBUG；目录由 MOSAIC_LOG_DIR（绝对路径）覆盖，否则 mosaic/log
         _mosaic_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        log_dir = os.path.join(_mosaic_root, "log")
+        log_dir = os.environ.get("MOSAIC_LOG_DIR", "").strip()
+        if log_dir:
+            log_dir = os.path.abspath(log_dir)
+        else:
+            log_dir = os.path.join(_mosaic_root, "log")
         try:
-            if not os.path.exists(log_dir):
-                os.makedirs(log_dir)
-            log_path = os.path.join(log_dir, "server.log")
+            os.makedirs(log_dir, exist_ok=True)
+            log_name = os.environ.get("MOSAIC_SERVER_LOG_BASENAME", "server.log").strip() or "server.log"
+            log_path = os.path.join(log_dir, log_name)
         except OSError:
             log_dir = os.path.join(os.getcwd(), "log")
             os.makedirs(log_dir, exist_ok=True)
             log_path = os.path.join(log_dir, "server.log")
 
         fh = logging.FileHandler(log_path, mode='a', encoding='utf-8')
-        fh.setLevel(logging.INFO)
+        fh.setLevel(logging.DEBUG)
         fh.setFormatter(formatter)
         logger.addHandler(fh)
 

@@ -1,0 +1,11 @@
+# 新建环境（仅 Python + pip，依赖见 requirements.txt）:
+#   conda env create -f environment.yml
+#   conda activate mosaic
+#   pip install -r requirements.txt
+name: mosaic
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.11
+  - pip

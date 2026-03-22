@@ -13,27 +13,22 @@ PROMPT_NEW_CLASS_SENSE = """
 4. New category names should be clear and unambiguous for subsequent retrieval.
 5. Information completeness: All message fragments, except purely greeting messages, must be included in the output.
 
-## Output Format 
-You must return a **JSON** The object must be a JSON object and must contain the following field:
+## Output
+Return one JSON object with field `new_classes` (array). Example shape:
 
 {
   "new_classes": [
     {
       "class_name": "The specific name of the new category",
       "related_message": [
-        {"message": "The context message content", "label": "The unique label ID corresponding to this context message"},
-        {"message": "The context message content", "label": "The unique label ID corresponding to this context message"}
+        {"message": "The context message content", "label": 1},
+        {"message": "The context message content", "label": 2}
       ]
     }
   ]
 }
 
-If no new category needs to be created, return：{"new_classes": []}
-
-OUTPUT FORMAT:
-1. Please return the entities as a JSON object.
-2. The JSON object should be able to be parsed by json.loads() in Python, and should not include any headers like ```json or```python.
-3. The return should ONLY be a valid JSON object, and should not contain any extra text or explanation.
+If no new category is needed: `{"new_classes": []}`. Preserve each fragment's `label` in outputs.
 """
 
 
@@ -52,8 +47,7 @@ Task requirements:
 3. Select the top ${top_k} most relevant classes that best answer the question.
 4. Sort the classes in descending order of relevance.
 
-Output format:
-Please strictly output the results in the following JSON format:
+Output: one JSON object:
 {
     "selected_classes": [
         {
@@ -95,15 +89,8 @@ When processing time-related information, please follow these guidelines:
 2. Always convert relative time references to specific dates, months, or years. For example,
 Based on the timestamp in memory, convert "last year" to "2022," or "two months ago" to "March 2023."
 3. If the date is difficult to deduce, provide the relative time. For example: last week of May 23, 2023.
-# Output Format
-You must return a **JSON** The object must be a JSON object and must contain the following field:
-{
-"response": "The answer to the question"
-}
-
-1. Please return the entities as a JSON object.
-2. The JSON object should be parsable by `json.loads()` in Python, and should not include any headers like ```json or ```python.
-3. The return should ONLY be a valid JSON object, and should not contain any extra text or explanation.
+# Output
+JSON object: `{"response": "<answer string>"}`.
 """
 
 JUDGE_ANSWER = """
@@ -122,17 +109,7 @@ Question: ${question}
 Gold answer: ${gold_answer}
 Generated answer: ${generated_answer}
 First, provide a short (one sentence) explanation of your reasoning, then finish with CORRECT or WRONG. Do NOT include both CORRECT and WRONG in your response, or it will break the evaluation script.
-Just return the label CORRECT or WRONG in a json format with the key as "label".
-
-# Output Format:
-{
-  "label": "CORRECT or WRONG"
-}
-
-# Output Format
-1. Please return the entities as a JSON object.
-2. The JSON object should be able to parsed by json.loads() in Python, also do not include any header like ```json or ```python.
-3. The return be ONLY a valid JSON object, and should not contain any extra text or explanation.
+End with JSON: `{"label": "CORRECT"}` or `{"label": "WRONG"}`.
 """
 
 
@@ -160,8 +137,8 @@ You are a sophisticated information perception and classification system. Your c
 
 **Existing Categories** (`${GRAPH_CLASSES}`)
 
-## Output Format & Rules
-You must **strictly** output the results in the following JSON format. This JSON must be correctly parsed by Python's `json.loads()`.
+## Output
+JSON object with:
 
 - **`related_classes`** (array): List the existing categories related to the input information.
 - `class_id`: (string) The existing category ID.
@@ -180,65 +157,24 @@ You must **strictly** output the results in the following JSON format. This JSON
 - `dependent_context`: (Array) An array of context information objects from the conversation history that are crucial for interpreting messages related to this new category. Each object must contain:
 - `message`: (string) The context message content
 - `label`: (number or string) The unique label ID corresponding to this context message
-
-
-OUTPUT FORMAT:
-1. Please return the entities as a JSON object.
-2. The JSON object should be able to be parsed by json.loads() in Python, and should not include any headers like ```json or```python.
-3. The return should ONLY be a valid JSON object, and should not contain any extra text or explanation.
 """
 
 PROMPT_CREATE_INSTANCE = """
-You are an object-oriented instance creation engine with advanced temporal awareness.  Based on the provided class information and relevant message snippets, create well-structured instances, paying particular attention to time-related information.
-**Key:** Ignore non-substantive content, such as greetings (e.g., "hello"), compliments (e.g., "thank you"), and purely social pleasantries. Focus only on factual information, actions, events, and entity attributes.
+You create structured instances from class context and messages (temporal awareness: parse explicit/implicit times). Ignore greetings; keep facts, events, entities.
 
-Class Information: ${class_node}
+**JSON** (required keyword for API JSON mode.)
 
-- Relevant Message Snippets:
+Class: ${class_node}
+Messages:
 ${related_messages}
-- Contextual Information:
+Context:
 ${context_messages}
 
-# Core Principles
-- **Clear Attributes:** Define clearly defined attribute fields (e.g., for a "person" object, define "name" and "age"; for an "event" object, define "event name" and "participants").
-- **Flexible Storage:** Use `uninstance_field` for substantive content information that cannot be clearly categorized into standard attributes.
-- **Temporal Precision:** Distinguish between `occurred` (the actual time the event occurred) and `recorded_at` (the time the event was mentioned in the conversation).
-- **Advanced Temporal Awareness:** You must additionally adhere to the following time processing principles:
-  Actively identify and parse all explicitly mentioned (e.g., "next Tuesday at 3 PM") and implicitly mentioned (e.g."two days ago," "after the meeting") time information in the messages.
-- **Message Label Tracking:**  All message labels directly used to create this instance must be fully recorded in the `message_labels` field to ensure traceability.
+Use `attributes` / `operations` with nested fields as needed (`description`, `value`, `occurred`, `recorded_at` for attributes). Put overflow text in `uninstance_field`. List all message label IDs used in `message_labels`.
 
-**Example Explanation**
-If an instance is created using messages with labels 3, 5, and 7, the `message_labels` field should be [3, 5, 7]. This indicates that the instance was built based on the content of these three message snippets.
-
-# Output Format
-Strictly follow the following JSON array format:
-
-[
-  {
-    "instance_id": "o_<incrementing number>",
-    "instance_name": "Descriptive instance name",
-    "attributes": {
-      "attribute_key_1": {
-        "description": "Attribute description",
-        "value": "Extracted attribute value or null",
-        "occurred": "Relative time of information unit occurrence or null",
-        "recorded_at": "Conversation date or null"
-      }
-    },
-    "operations": {
-      "operation_name_1": {
-        "description": "Description of the relevant operation"
-      }
-    },
-    "uninstance_field":"Unstructured information that cannot be categorized into defined attributes"
-    "message_labels": "Array of label IDs for all messages that directly contribute to this instance attribute"
-  }
-]
-
-OUTPUT FORMAT:
-1. Please return the entities as a JSON object.
-2. The JSON object should be able to be parsed by json.loads() in Python, and should not include any header like ```json or ```python.
-3. The return should ONLY be a valid JSON object, and should not contain any extra text or explanation.
+Return:
+{"instances": [ { "instance_id": "o_1", "instance_name": "...", "attributes": {}, "operations": {}, "uninstance_field": "", "message_labels": [] } ]}
+Use `"instances": []` if nothing substantive.
 """
 
 PROMPT_UPDATE_INSTANCE = """
@@ -271,11 +207,5 @@ The fact described by the new information (e.g., someone's "age," the "status" o
 - **Label Extraction:** Check the `message_labels` field of the instance.
 - **Label Addition:** For new labels (not present in the existing `message_labels`), they must be added to this field.
 - **Label Deduplication:** Ensure that there are no duplicate label IDs in `message_labels`.
-Please output the updated instance node, maintaining the original structure.
-
-
-OUTPUT FORMAT:
-1. Please return the entities as a JSON object.
-2. The JSON object should be able to parsed by json.loads() in Python, also do not include any header like ```json or ```python.
-3. The return be ONLY a valid JSON object, and should not contain any extra text or explanation.
+Output the full updated instance as one JSON object (same keys/structure as the input instance).
 """

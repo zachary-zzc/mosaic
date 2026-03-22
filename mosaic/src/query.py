@@ -59,11 +59,21 @@ def _print_qa_summary(qa_results, category_stats, error_records, qa_file_name):
     print(f"正确: {total_correct} | 错误: {total_wrong}")
 
 
-def process_single_qa(qa_file_path, graph_file_path, tag_file_path, output_file_path, summary_file_path, max_questions=None):
-    """处理单个qa文件的查询。max_questions: 最多评估题数，None 表示不限制。"""
+def process_single_qa(
+    qa_file_path,
+    graph_file_path,
+    tag_file_path,
+    output_file_path,
+    summary_file_path,
+    max_questions=None,
+    *,
+    method: str = "hash",
+):
+    """处理单个 qa 文件：检索 + LLM 作答 + LLM 评判。method: \"llm\"（类感知+实例检索用 LLM 路径）或 \"hash\"（TF-IDF 检索）。"""
     print(f"\n处理QA文件: {os.path.basename(qa_file_path)}")
     print(f"使用图文件: {os.path.basename(graph_file_path)}")
     print(f"使用标签文件: {os.path.basename(tag_file_path)}")
+    print(f"检索方式: {method}")
     print(f"输出文件: {output_file_path}")
 
     questions = read_to_file_json(qa_file_path)
@@ -74,7 +84,7 @@ def process_single_qa(qa_file_path, graph_file_path, tag_file_path, output_file_
     memory.graph = load_graphs(graph_file_path)
     memory.process_kw(tag_file_path)
 
-    query_fn = lambda q, mem: query(q, mem, "hash")
+    query_fn = lambda q, mem: query(q, mem, method)
     qa_results, category_stats, error_records = run_qa_loop(
         questions,
         memory,
@@ -100,12 +110,24 @@ def process_single_qa(qa_file_path, graph_file_path, tag_file_path, output_file_
         "qa_file": os.path.basename(qa_file_path),
         "graph_file": os.path.basename(graph_file_path),
         "tag_file": os.path.basename(tag_file_path),
+        "query_method": method,
         "summary": summary,
         "results": qa_results,
     }
+    summary_only = {
+        "qa_file": os.path.basename(qa_file_path),
+        "graph_file": os.path.basename(graph_file_path),
+        "tag_file": os.path.basename(tag_file_path),
+        "query_method": method,
+        "summary": summary,
+    }
+    if output_file_path:
+        with open(output_file_path, "w", encoding="utf-8") as f:
+            json.dump(result_data, f, ensure_ascii=False, indent=2)
+        print(f"\n完整结果已保存到: {output_file_path}")
     with open(summary_file_path, "w", encoding="utf-8") as f:
-        json.dump(result_data, f, ensure_ascii=False, indent=2)
-    print(f"\n结果已保存到: {summary_file_path}")
+        json.dump(summary_only if output_file_path else result_data, f, ensure_ascii=False, indent=2)
+    print(f"汇总已保存到: {summary_file_path}")
     _print_qa_summary(qa_results, category_stats, error_records, os.path.basename(qa_file_path))
     return result_data
 

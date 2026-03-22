@@ -1,229 +1,421 @@
-# 实验清单：Manuscript Placeholder 填充
+*Thinking...*
 
-本文档列出为填满 `Manuscript/manuscript.tex` 中所有 placeholder 所需补充的实验，按稿件结构与表格/图编号组织。每个实验对应 manuscript 中的具体位置与待填数值/内容。
+> The user is clarifying what MOSAIC actually does. Let me re-understand:
+> 
+> MOSAIC is a memory system that:
+> 1. Takes conversations as input
+> 2. Saves/organizes the conversation information into a graph structure
+> 3. Provides a query interface to retrieve relevant pieces of information from the stored graph
+> 
+> So it's essentially a **graph-based memory system for conversations** — similar to Mem0, memg, A-mem, etc. It's NOT a dialogue agent that conducts intake interviews. It's NOT a task-planning system.
+> 
+> This means:
+> - The experiments should evaluate MOSAIC as a **memory retrieval system**, not as a dialogue conductor
+> - The previous experiment plan was wrong because it treated MOSAIC as an agent that drives conversations with task graphs, evolving DAGs, entity acquisition, etc.
+> 
+> 
+> - The right experiments focus on how well MOSAIC stores and retrieves information from conversations compared to other memory systems like Mem0, A-mem, and MemGPT/Letta. LoCoMo is actually a primary benchmark here for long-conversation QA, and I should also consider multi-session memory retention as a key evaluation dimension.
+> 
+> Beyond that, I need to think about memory completeness—whether the graph captures all the important details from a conversation—and retrieval precision and recall to ensure it returns relevant information without noise. As conversations get longer, I'm curious how performance scales, and whether analyzing the actual graph structure reveals advantages over flat memory approaches. Ablation studies would help identify which components of the graph structure actually matter.
+> 
+> For datasets, LoCoMo with its multi-session conversations and varied question types is the obvious choice, and I should also look at Multi-Session Chat from Meta research and other conversation memory benchmarks to round out the evaluation.
+> 
+> Now I'm settling on the baselines to compare against: Mem0, A-mem, MemGPT, full context windows, RAG-based retrieval, recency-based filtering, and summary-based approaches. For the core experiment, I'll use LoCoMo as the primary benchmark—feeding multi-session conversations through each memory system and measuring accuracy across different question categories like single-hop, multi-hop, temporal, and open-ended queries.
+> 
+> Beyond that, I should test memory completeness and retrieval quality by evaluating how well each system stores and retrieves information from conversations, measure how performance scales with conversation length, run ablations to see which parts of MOSAIC's graph structure actually matter, and validate on domain-specific conversations like medical or customer service scenarios.
+> 
+> Actually, rereading the user's description—MOSAIC takes conversations, structures them as a graph, then retrieves relevant pieces when queried—I need to make sure my experiments are actually testing that core functionality rather than just generic memory benchmarks.
+> 
+> Looking at what's available, LoCoMo has QA pairs with ground truth, LongBench covers long contexts, ConvQuestions is specifically conversational, and QuALITY has question answering with extended texts. The most relevant ones for a conversation memory system would be those with conversational context and retrieval requirements.
+> 
+> For the MOSAIC paper, I want to demonstrate that the graph-based approach stores conversation information more completely than flat alternatives, retrieves more relevant context through graph traversal than vector similarity alone, scales better for long conversations, handles multi-hop reasoning through graph connections, and that each component of the graph structure actually contributes meaningfully. Now I'm looking at what datasets are actually available and accessible—LoCoMo is on GitHub and HuggingFace with the data I need.
+> 
+> Looking at the benchmark landscape, LoCoMo has around 10 multi-session dialogues with roughly 600 turns each and 300+ QA pairs covering single-hop, multi-hop, temporal, and adversarial categories. There's also Multi-Session Chat from Meta with persona-based conversations for evaluating consistency, and I should check if LongMemEval exists as another option. I'm also seeing that Mem0 and similar systems have already used LoCoMo as their primary evaluation benchmark, so that's a solid choice for comparison.
+> 
+> For additional evaluation, I could create synthetic conversations with specific properties, repurpose existing datasets like DailyDialog or PersonaChat by generating QA pairs, or test on domain-specific conversations. Since the user wants publicly available data with complete access, I'm thinking through other options like MultiWOZ for task-oriented dialogues where I could verify if MOSAIC correctly tracks slot-value changes, or FaithDial for faithful conversation evaluation.
+> 
+> The key insight is that MultiWOZ and SGD have ground-truth annotations of what information was communicated, so I could feed dialogues into MOSAIC, query for specific slots, and compare the extracted values against the annotations to measure memory completeness and accuracy.
+> 
+> For the experiments themselves, I'd run LoCoMo as the standard benchmark testing retrieval accuracy and multi-hop reasoning against baselines like Mem0, MemGPT, and full-context approaches. Then I'd add a task-oriented dialogue experiment using MultiWOZ or SGD to evaluate whether MOSAIC accurately captures and retrieves specific information from conversations.
+> 
+> I'd also test scalability by varying conversation length and measuring both retrieval quality and latency, potentially using LoCoMo at different truncation points. Finally, an ablation study would remove components of MOSAIC's graph structure to see which parts actually matter.
+> 
+> But wait—I need to reconsider what's actually compatible here. The user flagged that my previous plan had MOSAIC acting as an agent driving dialogues, which doesn't make sense since MOSAIC is fundamentally a memory system, not a dialogue agent. So I should focus these experiments on what MOSAIC actually does: store and retrieve information from conversations that already exist.
+> 
+> Now I'm thinking through the datasets I'll need. LoCoMo is the obvious choice for QA evaluation since it has conversations and questions with ground truth answers. MultiWOZ 2.4 would give me another dialogue dataset to work with.
+> 
+> For scalability testing, I can take LoCoMo and artificially extend it to see how the system handles larger conversation histories. The ablation study will use a subset of LoCoMo to isolate which components matter.
+> 
+> For baselines, I've got a solid range: Mem0 and A-mem are recent memory systems, MemGPT/Letta is the established agent memory framework, and then I need some simpler baselines like full-context retrieval, standard RAG, recency buffers, and periodic summarization to show what MOSAIC improves over.
+> 
+> Actually, I should reconsider which baselines make sense to implement given my constraints.
+> 
+> Now I'm thinking about what actually differentiates MOSAIC — it stores conversations as a graph of entities and relationships rather than flat chunks or summaries. That means I should focus on experiments that specifically test graph-based advantages: multi-hop reasoning across entities, capturing complex relationships, handling structured information, and temporal reasoning. Let me refocus the plan to be more concrete and actionable, with clear datasets, setup instructions, and specific experiment configurations that can all be run with publicly available resources. by QA type, comparing against baselines, running ablations to see which graph components matter most, and analyzing how the system scales. For a second dataset, I'm weighing options like MultiWOZ for task-oriented dialogue with structured annotations, or PersonaChat to test persona consistency across conversations—something that complements LoCoMo's strengths without duplicating it.
+> 
+> MultiWOZ looks promising since it has slot-value ground truth, letting me measure whether MOSAIC's graph captures all communicated information from a structured extraction angle rather than just QA performance. I could also generate synthetic conversations with controlled properties to have full control over ground truth, but for a focused paper, I think the cleaner approach is: LoCoMo as the primary benchmark with per-category breakdowns, an ablation study on a LoCoMo subset to isolate which components matter, and a scalability analysis tracking how performance and latency change with conversation length.
+> 
+> That gives me three solid experiments, though I'm wondering if I need a second benchmark to demonstrate generalizability. There's LongMemEval and the evaluation from the Mem0 paper that uses both LoCoMo and their own CRAG-like benchmark. For a strong paper I'd ideally want LoCoMo for direct comparison with existing work, something domain or application-specific, ablation studies, and scalability analysis—but the user wants minimal experiments, so I should see if I can consolidate these into a tighter set of experiments focused on LoCoMo with comprehensive analysis.
+> 
+> Let me step back and think about what experiments actually matter for a graph-based conversation memory system. The core claim is that MOSAIC outperforms existing memory systems on long conversations, so I need to design experiments that directly test that.
+> 
+> For the first experiment, I'm comparing against baselines on the LoCoMo benchmark. Then I can break down performance by query type to show where the graph structure helps most. The ablation removes components to validate that each piece contributes. For scalability, I'll measure how performance degrades as conversations get longer. And for the qualitative side, I want to show that the graph captures richer relational information than flat memory approaches.
+> 
+> Now I'm thinking about which datasets are actually available and suitable. LoCoMo is the obvious choice since it's designed for long conversations. DailyDialog and DSTC exist but have limitations—one lacks QA annotations, the other focuses on state tracking rather than memory retrieval. I should probably stick with LoCoMo as the main benchmark and maybe consider if there's a secondary dataset that would strengthen the evaluation.
+> 
+> For a second dataset, I could either create synthetic long conversations to test scalability in a controlled way, or adapt existing task-oriented dialogue datasets like MultiWOZ or SGD where the slot-value annotations could serve as ground truth for checking if the memory system captures the right information. Real Reddit or Ubuntu conversations are available too, but they don't have the structured annotations needed for proper evaluation.
+> 
+> Since MOSAIC is a general memory system rather than domain-specific, I should keep the evaluation general rather than tied to particular domains. So my plan is to run LoCoMo as the main benchmark with all baselines, then use MultiWOZ to test how well the system extracts and retains structured dialogue state information, and finally do ablations on a LoCoMo subset to understand which components matter and how performance scales. That gives me three focused experiments, each producing concrete results.
+> 
+> But now I'm questioning whether MultiWOZ is the right fit—it's really about tracking slot values in short conversations, not long-term memory across sessions. LoCoMo's 600-turn multi-session format is much better for testing memory retention. I could try SODA for longer social dialogues or create a synthetic evaluation with conversations of varying lengths, but that adds complexity. For now, I'll stick with LoCoMo as my primary benchmark and consider a synthetic evaluation as a secondary option if needed.
+> 
+> For the synthetic approach, I'd generate conversations with planted facts at different lengths—50 to 1000 turns—then query for recall and precision. It's controllable and gives perfect ground truth without needing another annotated dataset. So my plan is to run LoCoMo as the main comparison with baselines and category breakdowns, then add a synthetic scalability test to measure how performance degrades with conversation length.
+> 
+> Actually, I should consolidate these experiments more. I can run LoCoMo to get the main results table, per-category breakdown, accuracy curves, and qualitative examples all in one experiment. Then combine ablation and scalability analysis into a second experiment using LoCoMo sessions, which would give me the ablation table and scalability figures without duplicating effort.
+> 
+> But thinking about it more, three experiments feels reasonable and cleaner. Now I'm wondering whether I should compare MOSAIC against other graph-based memory systems specifically, or cast a wider net across all memory system types—buffer-based approaches like MemGPT's working memory, summary-based methods, entity-based systems like MOSAIC itself, and embedding-based retrieval approaches.
+> 
+> Since MOSAIC's strength is really in the graph structure, I should probably include diverse baseline types to show where that advantage comes through. Let me start drafting the experiment guide now with a practical structure covering the datasets, baselines, and three core experiments.
+> 
+> For the datasets, MultiWOZ actually makes sense here—I can frame it as testing whether MOSAIC can retain all the information communicated across a multi-turn task-oriented dialogue. I'd feed conversations into MOSAIC, then query for specific slot values against ground truth to evaluate structured information extraction, which is exactly what graph-based memory should excel at. SGD is another option with similar properties.
+> 
+> Now I'm thinking through how MOSAIC actually processes things: it ingests the conversation, builds out the graph structure with entities and relationships, then retrieves relevant information when queried. For evaluation, I need to design experiments that specifically test this pipeline and compare it meaningfully against the baselines.
+> 
+> I'm reconsidering the three experiments I outlined—LoCoMo for long-context QA, MultiWOZ for dialogue completeness, and an ablation study. But I want to make sure these are the right choices before finalizing.
+> 
+> Actually, I'm wondering if I can consolidate these. LoCoMo and MultiWOZ use different datasets and evaluation protocols, so they can't really merge. But I could fold the ablation work into the LoCoMo experiment by testing different MOSAIC configurations on the same data, then add scalability analysis there too. That would give me two clean experiments: one for main results across both datasets, and one for ablations and scaling behavior.
+> 
+> Wait, but the user's original plan was much more ambitious with 8 tables and 5 figures. Maybe I should stick with three experiments to keep it manageable while still covering the ground.
+> 
+> Now I'm thinking through which baselines I can actually run. I've got several open-source options available: Mem0 is pip-installable, A-mem is on GitHub, MemGPT/Letta is open source, and I can always do a simple full-context baseline or standard RAG. Let me figure out which ones are realistic to implement.
+> 
+> For the simpler baselines, I could add a recency buffer that just keeps the last N tokens, or do periodic summarization of the conversation—both are straightforward to set up. All of these are feasible to run.
+> 
+> One thing I need to nail down is which LLM I'm using for what. The answering LLM should be consistent across all methods so I'm only varying the memory system itself, probably something like GPT-4o or Qwen-2.5-72B. Then each memory system might use its own LLM internally for extraction or summarization, but that's separate from the main answering model.
+> 
+> Now I'm structuring the paper itself—I need dataset descriptions, the experiment setup, and then the actual experiment entries.
+> 
+> For metrics, I'm thinking accuracy broken down by category for LoCoMo, joint goal and slot accuracy for MultiWOZ, and for scalability I'll measure how accuracy and latency degrade as conversations get longer. Actually, for MultiWOZ I realize the standard evaluation is dialogue state tracking, but MOSAIC isn't a DST system. I can repurpose MultiWOZ by feeding the full dialogue into MOSAIC and querying for the final state—that becomes a memory evaluation rather than a turn-by-turn tracking task.
+> 
+> Better yet, I can frame this as information retrieval from dialogue: given a completed conversation, can the system answer questions about what was discussed? The slot annotations in MultiWOZ naturally give me the questions to ask, and the ground truth is already there. This is cleaner than constructing new QA pairs. The tradeoff is that MultiWOZ dialogues are short (~13 turns), so they won't stress-test long-term memory the way LoCoMo does, but they'll show how well the system extracts structured information—a different but valuable angle for a graph-based memory system.
+> 
+> Actually, I should prioritize LoCoMo as my main external benchmark and skip the MultiWOZ angle to avoid overcomplicating things. I'll focus instead on comprehensive analysis—ablations, scalability, graph quality—to strengthen the paper. My experiments will be: LoCoMo evaluation with full baseline comparisons and breakdowns by category, then an ablation study removing MOSAIC components to show what each part contributes.
+> 
+> Wait, but papers with only one benchmark often feel limited. Let me reconsider adding a second dataset—something like PersonaChat for persona consistency checks or Meta's Multi-Session Chat, which is specifically designed for multi-turn conversations where the system needs to retain information across sessions.
+> 
+> MSC looks promising since it has five conversation sessions between the same pair and explicit annotations for which previous utterances are relevant. I could adapt it for memory evaluation by retrieving relevant memories from sessions 1-4 for each turn in session 5, then checking if the retrieved memories match the gold-standard relevant utterances—this gives me direct retrieval precision and recall metrics.
+> 
+> Let me check what the Mem0 and A-mem papers actually use as benchmarks...
+> 
+> Both papers rely on LoCoMo as their primary benchmark, though they supplement it with custom evaluations. So I'll go with LoCoMo as my main external benchmark, then add a synthetic controlled evaluation where I generate conversations of varying lengths, plant specific facts at known positions, and measure how well the system retrieves them afterward—tracking recall, precision, and latency. This controlled setup lets me test scalability and specific capabilities in a way that most papers in this space do. I need to document the full experimental setup with dataset and baseline details, then design fresh result tables that align with the redefined memory system rather than trying to force the old paper's structure.
+> 
+> Generating the results tables...
 
----
+# MOSAIC Experiment Guide
 
-## 1. 摘要与引言
+## System Assumption
 
-| 实验/内容 | 产出 | 对应位置 |
-|-----------|------|----------|
-| **摘要数值** | 静态图方法退化 [X]%、DualGraph 维持 [Y]%；前瞻试验 [N] 例、获得率 [X]%、一致性 [Y]% | Abstract |
-| **摘要领域** | Domain 3、Domain 4 具体名称（如保险理赔、技术支持分流） | Abstract, Sec 1 |
-| **引言第二段** | 2–3 篇文献（2024–2025）量化“带记忆的 LLM 在结构化任务上失败”；Sharma et al. Nature Medicine；客服/临床/法律场景证据；提前终止率统计（如 WebArena/AgentBench） | `\placeholder{Paragraph 2...}` |
-
----
-
-## 2. Memory–Completeness Gap（记忆–完整性差距）
-
-**对应：Table 1 (tab:memory_gap)、Figure 1、正文叙述。**
-
-| 实验 | 产出 | 备注 |
-|------|------|------|
-| **四领域 Memory-only vs DualGraph** | 每域：Turns (mean±s.d.)、Acq.(%)、Conc.(%)、Un-om.(%)、p 值 | 需 [N] cases/domain；Hypertension 表中已有部分数值（4.3±2.7, 31.4±4.0, 57.9, 94.7, 42.7, 65.8），需补 Concordance 与 p |
-| **跨域叙述** | [X–Y]% 更高 entity acquisition；中位轮数 Memory-only [A] (range [B–C]) vs DualGraph [D] (range [E–F]) | 由表 1 汇总 |
-| **Figure 1** | (a) 架构示意 (b) 四域获得率 95% CI (c) 每域平均轮数 (d) 三档难度下获得率随轮数曲线 | 见 manuscript 中 Figure 1 placeholder 描述 |
-| **统计** | 每域 Cohen's d；各指标 95% bootstrap CI；预期 acquisition d>1.0，concordance d≈0.5 | `\placeholder{Statistical analysis...}` |
-
-**数据需求**：Domain 1–2 用 DrHyper/ physician profiles；Domain 3–4 需非医疗领域 case profiles（见 dataset/README.md）。
-
----
-
-## 3. Baseline 对比（DualGraph vs 六类基线）
-
-**对应：Table 2 (tab:baselines)、Figure 2。**
-
-| 实验 | 产出 | 备注 |
-|------|------|------|
-| **七方法 × 四领域** | 每格：Acq.(%)、Conc.(%)、Trn（平均轮数） | ReAct, Reflexion, Plan-and-Solve, MemGPT, Mem0, Checklist, DualGraph |
-| **Figure 2** | (a) 四域×方法 获得率 95% CI (b) Hypertension 上各方法获得率随轮数 (c) 失败模式堆叠条（提前终止/话题漂移/重复问/前提违反）(d) 每轮效率 vs 总获得率 | 见 manuscript Figure 2 placeholder |
-| **叙述数值** | ReAct/Reflexion 获得率约 70–80%；Checklist 在“深度前提链”域（Domain X, L=Y）退化 | 由表 2 与单独深度分析得出 |
-| **统计** | DualGraph vs 各基线逐域 Welch t-test + Bonferroni；效应量；α=0.05 下显著优于的域数 | `\placeholder{Statistical comparisons...}` |
-
-**数据需求**：同 Section 2；需同一批 case 上跑齐所有基线。
-
----
-
-## 4. Evolving Inference DAGs（演化 DAG）
-
-**对应：Table 3 (tab:evolving)、Figure 3、正文。**
-
-| 实验 | 产出 | 备注 |
-|------|------|------|
-| **Emergence 测试集** | 每域 [M] 预定义实体 + [K] 额外“涌现”实体（范围 K_min–K_max）；设计为真实意外（少见合并症、非标配置等） | 需专家设计 emergence 实体 |
-| **预定义 vs 涌现获得率** | 表 3：Pre-specified Acq.（Hyp.、D3 两列）、Emergent Acq.（Hyp.、D3）、Graph Growth；DualGraph(static) 涌现列 0；DualGraph(evolving) 填 +K nodes 及获得率 | 仅 Hyp. 与 D3 两域示例时可先做 2 域 |
-| **Figure 3** | (a) 单例三时刻图 (b) 涌现实体获得率 (c) 预定义实体上 static vs evolving 不退化 (d) NCS 局部性：\|U_t\| vs \|V^(t)\| (e) \|V^(t)\|、\|E_P^(t)\| 随轮数 | 见 manuscript Figure 3 |
-| **叙述** | 涌现实体上 DualGraph+Evolving [X]%；static vs evolving 在预定义实体上差异 [Y]%（不显著）；中位 \|U_t\|、\|V^(t)\|、比值 [Z]% | 由表 3 与 NCS 日志计算 |
-| **定性例子** | 2–3 段对话摘录：ACE 抑制剂过敏节点创建与关联；static 仅存记忆不追问；非医疗一例 | `\placeholder{Qualitative examples...}` |
-
-**数据需求**：每域带“预定义+涌现”标注的 case profiles；需记录每轮图与 U_t。
-
----
-
-## 5. NCS 机制验证（Neighbor-Conditioned Stability）
-
-**对应：Table 4 (tab:ncs_validation)、Figure 4。**
-
-| 实验 | 产出 | 备注 |
-|------|------|------|
-| **NCS vs Global-recompute** | 同一批对话下两种模式：NCS 仅局部重算 vs 每轮全图重算；比较每轮得分向量 | Hypertension [N] cases |
-| **Table 4** | Score match rate；NCS prediction match rate (%)；Mean \|U_t\|；Mean score oscillations per entity；Mean per-turn score-update time (ms)；Entity acquisition (%)；Concordance (%) | 见 manuscript 表 4 |
-| **Figure 4** | (a) 每轮“实际改变节点集”vs NCS 预测 U_t，报告一致比例与差异大小 (b) 每实体得分符号翻转次数 NCS vs global (c) 每轮更新时间(ms) vs \|V\| (d) \|V\|∈{10,20,40,60,80,100} 下 DualGraph/Checklist/ReAct 获得率 (e) 边删/加/反 10/20/30/50% 时获得率下降 + NCS 预测“损伤半径” | 见 manuscript Figure 4 |
-| **叙述** | NCS match rate ≥99%；NCS 下振荡 [X]% 更低；高复杂度下 global 多 [Y] 次切换目标；每轮更新 [A]× 更快；两模式 acquisition/concordance 无显著差异 | `\placeholder{Narrative...}` |
-
-**数据需求**：Hypertension 域；可复用 Section 2 的 cases；需记录每轮 U_t 与得分。
-
----
-
-## 6. 消融（Ablation）
-
-**对应：Table 5 (tab:ablation_summary)、Supplementary 全表。**
-
-| 实验 | 产出 | 备注 |
-|------|------|------|
-| **七条件** | Full DualGraph；−Prerequisite graph；−Association graph；−Community detection；−Confidence gating；−Long-term memory；−Evolving DAG | Hypertension [N] cases |
-| **每行** | Acq.(%)、ΔAcq.、Conc.(%)、Turns、Coherence | 见 manuscript 表 5 |
-| **叙述** | 去掉前提图约 −X%；去掉关联图 −Y%（主要影响 coherence）；去掉 confidence gating 对获得率影响小、concordance −W%；无长期记忆在 >20 轮退化；无 evolving 仅在 emergence 集上退化 | 与 Section 4 联合 |
-
-**数据需求**：Hypertension；可与 Section 2 共用 cases，另需 58 例用于消融（见 Methods）。
-
----
-
-## 7. 任务图半自动构建（Graph Construction）
-
-**对应：Table 6 (tab:graph_construction)、Figure 5。**
-
-| 实验 | 产出 | 备注 |
-|------|------|------|
-| **四领域** | 每域：Prereq./Assoc./Overall edge F1；Auto / Auto+Review / Expert 下游 Acq.(%)；Review 时间 (min) | 需专家设计的 gold graph 与 LLM 生成图 + 专家审阅 |
-| **Figure 5** | (a) 流程示意 (b) 边级 P/R/F1 (c) Auto vs Auto+Review vs Expert 获得率 (d) 专家修正的 NCS 局部性 | 见 manuscript Figure 5 |
-| **叙述** | 无审阅差距 [X]%、有审阅 [Y]%；平均审阅 [Z] min/域；不完整图缺 [K]% 实体时，evolving 恢复 [W]% | 见 manuscript |
-
-**数据需求**：每域有“任务说明→LLM 图→专家图”的 pipeline 与标注；下游用同一批 evaluation cases。
-
----
-
-## 8. 下游决策（Downstream）
-
-**对应：Table 7 (tab:downstream)、因果分析、Supplementary。**
-
-| 实验 | 产出 | 备注 |
-|------|------|------|
-| **Table 7** | 每域：Memory-only / DualGraph (static) / DualGraph (evolving)；临床域：Classif.(%)、Risk(%)、Med.(1–5)、Follow-up(1–5)；非医疗域：域特定决策指标 | Hypertension 部分行已有数值，需补全 Diabetes、D3、D4 及 evolving 行 |
-| **因果分析** | 例如：200 例中 DualGraph 因多获得器官损伤标记而改变风险分层的例数与比例 | `\placeholder{Causal analysis...}` |
-| **Supplementary** | 完整临床/糖尿病/非医疗下游结果；按风险分层错误分析（DrHyper Section E.9） | Appendix Downstream Results |
-
-**数据需求**：DrHyper 200 例；Diabetes [N] 例；Domain 3/4 需定义并实现下游指标。
-
----
-
-## 9. 前瞻临床试点（Pilot）
-
-**对应：Section 3.2.2、Appendix Pilot。**
-
-| 实验 | 产出 | 备注 |
-|------|------|------|
-| **设计** | N=30–50，高血压门诊； clinician-in-the-loop；指标：获得率、与医生记录一致性、信任度(1–5)、完成时间、干预次数、安全旗；IRB 号 | `\placeholder{Pilot study design...}` |
-| **结果** | 获得率 DualGraph [X]% vs 医生 [Y]%；一致性 [X]%；信任度 [Y]/5 (range [A–B])；干预 [Z] 次/例；安全旗 [N]、真阳 [M]、假阳 [K]；evolving 激活比例 [P]%、成功整合 [Q]% | 见 manuscript 列表 |
-| **Supplementary** | IRB、知情同意、入排标准、逐例结果、医生反馈、安全事件日志 | Appendix Pilot |
-
-**数据需求**：真实患者、伦理审批；若暂不做试点，可在 manuscript 中保留为“拟进行”并注明。
+MOSAIC is a graph-based conversation memory system. Its two core operations are **ingest** (read a conversation and organize information into a graph of entities and relationships) and **query** (given a natural language question, traverse the graph to retrieve relevant pieces of information). The answering LLM receives the retrieved context and produces a final answer. All experiments evaluate these two capabilities under different conditions.
 
 ---
 
-## 10. LoCoMo 长程记忆基准
+## Results Map
 
-**对应：Appendix LoCoMo、Table (tab:locomo)。**
-
-| 实验 | 产出 | 备注 |
-|------|------|------|
-| **LoCoMo 评估** | Overall、Single-hop、Multi-hop、Temporal 准确率 (%)；方法：A-mem, Mem0, MemGPT, memg, zep, DualGraph | 表中有 Mem0 61.43、memg 60.41、DualGraph 80.89 等，需补全各方法各列 |
-| **分析** | DualGraph 因实体标注+置信度+图结构写入记忆而提升检索；NCS 减少矛盾 overwrite；注明与 Mem0 官方 LoCoMo 协议差异 | `\placeholder{Analysis...}` |
-
-**数据需求**：LoCoMo 基准数据与标准协议（见 dataset/README.md）。
-
----
-
-## 11. 方法部分需填的数值与描述
-
-| 内容 | 产出 | 位置 |
-|------|------|------|
-| **Domain 1 (Hypertension)** | \|V\|、深度 L、关联图密度、社区数；200+58 例说明 | sec:methods_domains |
-| **Domain 2 (Diabetes)** | \|V\|、L、[N] 例 | sec:methods_domains |
-| **Domain 3** | 名称（如保险理赔）、\|V\|、L、ground truth 来源 | sec:methods_domains, Table graph_structure |
-| **Domain 4** | 名称（如 IT 支持分流）、\|V\|、L、ground truth 来源 | 同上 |
-| **Table 图结构** | 四域：\|V\|、\|E_P\|、\|E_A\|、Depth L、Δ_max、Communities | tab:graph_structure |
-| **Baseline 实现** | 各基线共用的 LLM、prompt、simulator 说明（稿中已有描述，只需确认与实验一致） | sec:methods_baselines |
-| **Simulators** | 临床/非临床/试点 说明（稿中已有，确认即可） | sec:methods_simulators |
-| **Metrics** | 主/次/下游指标及统计（稿中已有，确认 Coherence 抽样 [N]） | sec:methods_metrics |
+| Output | Source |
+|--------|--------|
+| Table 1 — LoCoMo overall comparison | Experiment 1 |
+| Table 2 — LoCoMo per-category breakdown | Experiment 1 |
+| Table 3 — Retrieval precision / recall | Experiment 1 |
+| Table 4 — Scalability accuracy | Experiment 2 |
+| Table 5 — Efficiency (latency & memory) | Experiment 2 |
+| Table 6 — Ablation results | Experiment 3 |
+| Figure 1 — Architecture diagram | Manual |
+| Figure 2 — LoCoMo accuracy bar chart | Experiment 1 |
+| Figure 3 — Per-category radar chart | Experiment 1 |
+| Figure 4 — Accuracy vs conversation length | Experiment 2 |
+| Figure 5 — Latency vs conversation length | Experiment 2 |
+| Figure 6 — Ablation delta chart | Experiment 3 |
+| Figure 7 — Graph structure visualization | Experiment 1 (qualitative) |
 
 ---
 
-## 12. 其他 Placeholder 与附录
+## Datasets
 
-| 内容 | 产出 | 位置 |
-|------|------|------|
-| **LoCoMo 引用** | LoCoMo 正式文献/技术报告 | `\bibitem{locomo_ref}` |
-| **Supplementary 消融** | 14 条件完整消融表 | app:ablation |
-| **Supplementary 计算成本** | 每轮延迟分解、每对话总成本、与 \|V\|/Δ_max 的缩放、NCS 加速比 | app:compute |
-| **Supplementary Evolving 扩展** | 涌现检测 P/R、图附着质量、NCS 在增长下的 containment、图增长动态、失败模式统计、定性例子 | app:evolving |
+### Dataset 1 — LoCoMo
+
+LoCoMo is the established benchmark for long-conversation memory systems. It contains multi-session dialogues between pairs of speakers, along with human-annotated QA pairs that require recalling information from earlier sessions.
+
+| Item | Detail |
+|------|--------|
+| Full name | Long Conversation Memory |
+| GitHub | https://github.com/snap-stanford/LoCoMo |
+| HuggingFace | https://huggingface.co/datasets/nicolasstucki/locomo |
+| Content | 10 multi-session conversations, approximately 600 turns each |
+| QA pairs | 300+ pairs with ground-truth answers |
+| QA categories | Single-hop, multi-hop, temporal, open-ended, adversarial |
+| Splits | Use all 10 conversations for evaluation (following prior work) |
+
+Each QA pair consists of a question, the gold answer, the set of evidence utterances from the conversation that support the answer, and a category label. This structure allows evaluation of both end-to-end answer accuracy and intermediate retrieval quality.
+
+### Dataset 2 — Synthetic Controlled Conversations
+
+This dataset is generated to provide perfect ground truth and control over conversation length, fact density, and temporal distance between information and query. It complements LoCoMo by enabling scalability and efficiency analysis under controlled conditions.
+
+#### Generation Protocol
+
+Define a pool of 200 fact templates across 8 categories: personal information (name, age, birthday, hometown), preferences (food, music, hobby, travel), events (meetings, trips, milestones, incidents), opinions (on topics, products, policies), relationships (family members, friends, colleagues), schedules (appointments, deadlines, routines), health (conditions, medications, allergies), and work (role, projects, skills, goals). Each template has the form "[Subject] [relation] [object]" with typed slots.
+
+For each synthetic conversation, sample K facts from the pool and generate a natural multi-turn dialogue that organically incorporates these facts, interspersed with casual chit-chat that does not contain target facts (distractor turns). Use GPT-4o with temperature 0.7 to generate the conversations, providing the fact list and a persona pair description as input. After generation, verify that each planted fact appears in the conversation by automated string matching, and regenerate any conversation where a fact is missing or distorted.
+
+#### Configurations
+
+| Config ID | Total turns | Facts planted | Fact density | Conversations | Purpose |
+|-----------|-------------|---------------|-------------|---------------|---------|
+| S-100 | 100 | 20 | 1 per 5 turns | 50 | Short baseline |
+| S-300 | 300 | 40 | 1 per 7.5 turns | 50 | Medium |
+| S-600 | 600 | 60 | 1 per 10 turns | 50 | LoCoMo-comparable |
+| S-1000 | 1,000 | 80 | 1 per 12.5 turns | 50 | Long |
+| S-2000 | 2,000 | 100 | 1 per 20 turns | 30 | Stress test |
+
+For each planted fact, generate one direct query and one rephrased query, yielding 2 × K QA pairs per conversation. Ground truth is exact because facts are planted by design.
+
+**Total synthetic QA pairs:** (50×40) + (50×80) + (50×120) + (50×160) + (30×200) = 2,000 + 4,000 + 6,000 + 8,000 + 6,000 = 26,000
 
 ---
 
-## 实验子目录与建议分工
+## Baselines
 
-| 子目录 | 主要对应实验 | 建议产出 |
-|--------|--------------|----------|
-| `01_memory_gap` | Section 2：Memory-only vs DualGraph，Table 1，Figure 1 | 表数据、图、统计 |
-| `02_baselines` | Section 3：七方法四域，Table 2，Figure 2 | 表数据、图、失败模式 |
-| `03_evolving_dag` | Section 4：涌现集，Table 3，Figure 3，定性例 | 表、图、对话摘录 |
-| `04_ncs_mechanism` | Section 5：NCS 验证，Table 4，Figure 4 | 表、图、缩放/扰动 |
-| `05_ablation` | Section 6：消融表 5 + 附录全表 | 表、叙述 |
-| `06_graph_construction` | Section 7：半自动建图，Table 6，Figure 5 | 表、图、审阅时间 |
-| `07_downstream` | Section 8：下游 Table 7，因果分析，附录 | 表、文本 |
-| `08_pilot` | Section 9：前瞻试点（若执行） | 设计、结果、附录 |
-| `09_locomo` | Appendix LoCoMo 表与分析 | 表、分析段落 |
+All methods share the same answering LLM (Qwen-2.5-72B-Instruct, temperature 0) so that the only variable is the memory system. Each memory system receives the same conversation and the same query; it returns a context string; the answering LLM produces the final answer from that context.
 
-每个子目录内可再含：`run_*.py` / `run_*.sh`、结果文件（如 `results/`）、图表脚本或说明（如 `figures/`、`README.md`）。
+| ID | Method | Type | Source | Notes |
+|----|--------|------|--------|-------|
+| B1 | Full Context | Buffer | N/A | Concatenate entire conversation into the LLM context window. Upper bound on what the LLM can do with perfect memory but limited context length. Truncate from the front if conversation exceeds context window. |
+| B2 | Recency Buffer | Buffer | N/A (trivial implementation) | Keep only the most recent N tokens (N = 4096). Represents the no-memory baseline. |
+| B3 | Summary Memory | Compression | N/A (implement with same LLM) | Every 20 turns, summarize the conversation so far into a running summary. At query time, provide the summary as context. |
+| B4 | RAG | Retrieval | LangChain or LlamaIndex | Chunk conversation into segments of 10 turns. Embed each chunk with `BAAI/bge-large-en-v1.5`. At query time, embed the query, retrieve top-5 chunks by cosine similarity. |
+| B5 | Mem0 | Hybrid | https://github.com/mem0ai/mem0 | Official SDK, default configuration. Represents the current state-of-the-art open-source memory system. |
+| B6 | A-mem | Agentic | https://github.com/agiresearch/A-mem | Agentic memory with self-reflection. Follow default configuration from the repository. |
+| B7 | MemGPT / Letta | Tiered | https://github.com/letta-ai/letta | Official Letta framework. Uses tiered memory (core, recall, archival). Default configuration. |
+| B8 | MOSAIC | Graph | This work | Graph-based memory. Ingest conversation into entity-relationship graph, retrieve by graph traversal + embedding similarity. |
+
+### Published Baselines (Cite Without Re-running)
+
+Some methods have published LoCoMo numbers that can be cited for reference. However, for a fair comparison, all methods should be re-run under the identical protocol (same answering LLM, same prompts, same evaluation script).
+
+| Method | Published overall accuracy | Source |
+|--------|---------------------------|--------|
+| Mem0 | 61.43% | arXiv:2504.19413 |
+| memg | 60.41% | Same paper |
+| ReadAgent | ~54% | LoCoMo paper |
+| Full Context (GPT-4) | ~67% | LoCoMo paper |
+
+These numbers serve as sanity checks. If re-run numbers deviate significantly, investigate prompt or evaluation differences.
 
 ---
 
-## 与 Manuscript 的对应关系
+## Evaluation Metrics
 
-- **表格**：每个 `\placeholder{}` 或空单元格都需由上表某一行的“产出”填充。
-- **图**：Figure 1–5 的 panel 描述在 manuscript 的 `\placeholder{\textbf{Figure X...}}` 中，按描述出图后替换 placeholder。
-- **正文 [X]/[Y]/[N]**：由对应实验的数值或设计（如 [N] cases）填入。
-- **Domain 3/4**：先定名称与数据来源（见 dataset/README.md），再统一替换所有 `\placeholder{Domain 3}`、`\placeholder{Domain 4}`、`\placeholder{D3}`、`\placeholder{D4}`。
+### Answer Quality Metrics
 
-完成上述实验并汇总到 manuscript 后，可移除或替换所有 placeholder 与黄色框。
+**Accuracy (Acc):** The primary metric. Use an LLM-as-judge approach (GPT-4o, temperature 0) to assess whether the generated answer is semantically equivalent to the gold answer. The judge prompt provides the question, gold answer, and predicted answer, and returns a binary correct/incorrect judgment. This follows the evaluation protocol established in the LoCoMo paper and used by Mem0.
+
+**F1 Score:** Token-level F1 between predicted and gold answers, computed after lowercasing and removing stopwords. Serves as a secondary metric less sensitive to LLM judge variance.
+
+**Category-level Accuracy:** Accuracy broken down by QA category (single-hop, multi-hop, temporal, open-ended, adversarial). This reveals which types of queries benefit most from graph-based memory.
+
+### Retrieval Quality Metrics
+
+**Retrieval Recall (R-Recall):** For LoCoMo QA pairs that include evidence utterance annotations, compute the fraction of gold evidence utterances that appear in (or are semantically covered by) the retrieved context. This measures whether the memory system finds the right information.
+
+**Retrieval Precision (R-Precision):** Fraction of retrieved context chunks/pieces that are relevant to the query (judged by LLM or by overlap with gold evidence). This measures how much noise the memory system introduces.
+
+### Efficiency Metrics
+
+**Ingestion latency:** Wall-clock time to ingest a full conversation into the memory system (build the graph / index / summary).
+
+**Query latency:** Wall-clock time from query input to context output (not including the answering LLM call, which is shared across all methods).
+
+**Memory footprint:** Peak RAM usage of the memory system during and after ingestion.
 
 ---
 
-## 如何运行实验脚本（完整构建，无占位符）
+## Experiment Execution
 
-**一键完整构建（仓库根目录）：**
-```bash
-# 跑齐 01–09，输出完整表格与 JSON（无占位符），并导出到 Manuscript/generated/
-python experiments/run_all.py
+### Experiment 1 — LoCoMo Benchmark Evaluation
 
-# 09 不跑 LLM 时只做汇总与导出（用已有 results 或参考值）
-python experiments/run_all.py --skip-locomo-run
+**Purpose:** Establish MOSAIC's performance relative to all baselines on the standard long-conversation memory benchmark.
 
-# 仅导出：从现有 results 生成 Manuscript/generated/*.tex
-python experiments/run_all.py --export-only
+**Produces:** Table 1 (overall comparison), Table 2 (per-category breakdown), Table 3 (retrieval precision/recall), Figure 2 (accuracy bar chart), Figure 3 (radar chart), Figure 7 (qualitative graph visualization)
+
+#### Setup
+
+1. Download LoCoMo dataset from the GitHub or HuggingFace link above.
+2. For each of the 10 conversations, prepare a single JSON file containing the full multi-session dialogue in chronological order.
+3. For each QA pair, record: question, gold answer, evidence utterances, category label.
+
+#### Procedure
+
+For each method B1–B8:
+
+**Step 1 — Ingest.** Feed all 10 conversations into the memory system. Each conversation is ingested independently (the memory is reset between conversations). Record ingestion time per conversation.
+
+**Step 2 — Query.** For each QA pair, submit the question to the memory system. The memory system returns a context string. Record the returned context and query latency.
+
+**Step 3 — Answer.** Pass the question and retrieved context to the shared answering LLM. Record the generated answer.
+
+**Step 4 — Evaluate.** Run the LLM-as-judge on all (predicted answer, gold answer) pairs. Compute token-level F1. For methods where retrieved context is inspectable (B4, B5, B6, B8 — not B1/B2/B3 which provide full context or summaries), compute R-Recall and R-Precision against evidence utterances.
+
+#### Total Runs
+
+8 methods × 10 conversations × ~30 QA pairs per conversation ≈ 2,400 query evaluations. Plus 8 × 10 = 80 ingestion operations.
+
+#### Extracting Results
+
+**Table 1 — Overall Comparison:** One row per method. Columns: Accuracy, F1, R-Recall, R-Precision, Ingestion latency (mean per conversation), Query latency (mean per query). For B1/B2/B3 where retrieval metrics are not applicable, mark as "—".
+
+**Table 2 — Per-Category Breakdown:** Rows are methods, columns are (Single-hop Acc, Multi-hop Acc, Temporal Acc, Open-ended Acc, Adversarial Acc). This table reveals whether MOSAIC's graph structure specifically helps with multi-hop and temporal queries, which require connecting information across distant parts of the conversation.
+
+**Table 3 — Retrieval Quality:** For methods B4, B5, B6, B7, B8, report R-Recall and R-Precision. Break down by category. This shows whether MOSAIC retrieves more relevant and less noisy context.
+
+**Figure 2:** Grouped bar chart with methods on x-axis and accuracy on y-axis, one bar group per QA category plus an "Overall" group.
+
+**Figure 3:** Radar chart with 5 axes (one per QA category). One polygon per method. Visually shows each method's strength/weakness profile.
+
+**Figure 7:** Select 2–3 representative QA pairs where MOSAIC answers correctly but baselines fail. For each, visualize the subgraph that MOSAIC traversed to retrieve context. Annotate entities and edges that contributed to the correct retrieval. This is generated programmatically from MOSAIC's graph data structure and the query log.
+
+#### Statistical Testing
+
+Bootstrap 95% confidence intervals on accuracy (resample QA pairs 1,000 times). Paired bootstrap test between MOSAIC and each baseline. Report p-values in Table 1.
+
+---
+
+### Experiment 2 — Scalability and Efficiency Analysis
+
+**Purpose:** Measure how each method's accuracy and latency scale as conversation length increases, under controlled conditions with perfect ground truth.
+
+**Produces:** Table 4 (scalability accuracy), Table 5 (efficiency comparison), Figure 4 (accuracy curves), Figure 5 (latency curves)
+
+#### Setup
+
+1. Generate the synthetic conversations following the protocol in the Dataset 2 section above.
+2. For each configuration (S-100 through S-2000), prepare conversation files and corresponding QA pairs.
+
+#### Procedure
+
+For each method B1–B8, for each configuration S-100 through S-2000:
+
+**Step 1 — Ingest.** Feed conversations into the memory system. Record ingestion time and peak memory usage.
+
+**Step 2 — Query.** Submit all QA pairs. Record retrieved context and query latency.
+
+**Step 3 — Answer and Evaluate.** Same as Experiment 1. Since ground truth is exact (planted facts), use both LLM-as-judge and exact substring match as metrics. The exact match provides a hard lower bound; the LLM judge captures semantic equivalence for paraphrased answers.
+
+#### Total Runs
+
+8 methods × 5 configurations × (50 or 30 conversations) × (40–200 QA pairs per conversation). Total QA evaluations: 8 × 26,000 = 208,000. This is compute-intensive but each evaluation is a single LLM call. To reduce cost, subsample: for S-100 through S-1000, evaluate all QA pairs from 10 randomly selected conversations per configuration (instead of all 50). For S-2000, evaluate all 30 conversations. Revised total: 8 × [(10×40 + 10×80 + 10×120 + 10×160) + (30×200)] = 8 × (400+800+1200+1600+6000) = 8 × 10,000 = 80,000 evaluations.
+
+#### Extracting Results
+
+**Table 4 — Scalability Accuracy:** Rows are methods. Columns are configurations (S-100, S-300, S-600, S-1000, S-2000). Each cell contains mean accuracy ± std. Add a column for "Δ" showing accuracy drop from S-100 to S-2000. This reveals which methods degrade most with conversation length.
+
+**Table 5 — Efficiency:** Rows are methods. Columns: ingestion latency at S-600 (median), query latency at S-600 (median), peak memory at S-600, ingestion latency at S-2000, query latency at S-2000, peak memory at S-2000. For B1 (full context), ingestion latency is zero but query latency includes the full context processing time by the answering LLM. Note: B1 may fail entirely at S-2000 if the conversation exceeds the context window — record this as a truncation rate.
+
+**Figure 4:** Line chart. X-axis is conversation length (100 to 2000 turns), y-axis is accuracy. One line per method. Error bars from std across conversations. Expected patterns: B1 (full context) is strong at short lengths but drops sharply when truncation begins. B2 (recency) is poor throughout. B3 (summary) degrades as lossy compression accumulates. B4 (RAG) is stable but mediocre. MOSAIC should maintain high accuracy across all lengths due to graph structure preserving relationships regardless of conversation length.
+
+**Figure 5:** Line chart. X-axis is conversation length, y-axis is query latency (log scale). One line per method. Expected patterns: B1 latency grows linearly. B4 (RAG) grows sub-linearly. MOSAIC's latency depends on graph traversal depth, which should grow slowly.
+
+---
+
+### Experiment 3 — Ablation Study
+
+**Purpose:** Identify the contribution of each MOSAIC component to overall performance.
+
+**Produces:** Table 6 (ablation results), Figure 6 (delta chart)
+
+#### Ablation Conditions
+
+Each condition removes or disables one component of MOSAIC while keeping everything else identical.
+
+| ID | Condition | What changes |
+|----|-----------|-------------|
+| C0 | Full MOSAIC | Nothing removed (control) |
+| C1 | − Entity extraction | Disable entity node creation; store conversation chunks as flat text nodes in the graph (edges still computed by embedding similarity) |
+| C2 | − Relationship edges | Disable relationship/edge extraction between entities; graph becomes a set of isolated entity nodes; retrieval uses embedding similarity only |
+| C3 | − Graph traversal | At query time, retrieve by embedding similarity over nodes only; do not traverse edges to expand context |
+| C4 | − Temporal ordering | Remove temporal metadata from nodes and edges; graph has no notion of when information appeared |
+| C5 | − Community structure | Disable community detection on the graph; retrieval does not consider cluster membership for context expansion |
+| C6 | − Deduplication / merging | Disable entity merging; if the same entity appears multiple times across the conversation, store as separate nodes |
+
+#### Setup and Procedure
+
+Use the LoCoMo dataset (same as Experiment 1). For each condition C0–C6, ingest all 10 conversations and evaluate all 300+ QA pairs using the identical answering LLM and evaluation protocol.
+
+#### Total Runs
+
+7 conditions × 10 conversations × ~30 QA pairs ≈ 2,100 evaluations. Plus 7 × 10 = 70 ingestion operations.
+
+Note that C0 results are identical to the B8 (MOSAIC) results from Experiment 1. No need to re-run; reuse those logs.
+
+#### Extracting Results
+
+**Table 6 — Ablation Results:** Rows are conditions C0–C6. Columns: Overall Acc, Single-hop Acc, Multi-hop Acc, Temporal Acc, Open-ended Acc, Adversarial Acc, Δ Overall (drop from C0). This reveals which components matter most and for which query types.
+
+Expected patterns: C2 (no relationship edges) and C3 (no traversal) should cause the largest drops on multi-hop queries, since answering multi-hop questions requires following entity connections. C4 (no temporal ordering) should disproportionately hurt temporal queries. C1 (no entity extraction) should hurt everything by reducing the graph to a RAG-like system, confirming the value of structured extraction. C6 (no dedup) should hurt precision by creating redundant context.
+
+**Figure 6:** Horizontal bar chart. Each bar represents one ablation condition. Bar length is the accuracy drop (Δ) from C0. Group or color-code bars by which query category is most affected. This provides an at-a-glance view of component importance.
+
+---
+
+## Execution Summary
+
+| Experiment | Datasets used | Methods run | Total evaluations | Outputs |
+|-----------|---------------|-------------|-------------------|---------|
+| Exp 1: LoCoMo | LoCoMo (10 conv, 300+ QA) | B1–B8 (8 methods) | ~2,400 | Tables 1, 2, 3; Figures 2, 3, 7 |
+| Exp 2: Scalability | Synthetic (230 conv, ~10K QA sampled) | B1–B8 (8 methods) | ~80,000 | Tables 4, 5; Figures 4, 5 |
+| Exp 3: Ablation | LoCoMo (reuse) | C0–C6 (7 configs of MOSAIC) | ~2,100 (C0 reused from Exp 1) | Table 6; Figure 6 |
+| **Total** | | | **~84,500** | **6 tables, 6 figures** |
+
+---
+
+## Reproducibility Checklist
+
+All logs must be saved in a standardized JSON format per query evaluation:
+
+```json
+{
+  "experiment": "exp1",
+  "method": "mosaic",
+  "conversation_id": "locomo_03",
+  "qa_id": "q_142",
+  "category": "multi-hop",
+  "question": "...",
+  "gold_answer": "...",
+  "retrieved_context": "...",
+  "predicted_answer": "...",
+  "judge_correct": true,
+  "token_f1": 0.82,
+  "evidence_utterances_gold": ["u_45", "u_203"],
+  "evidence_utterances_retrieved": ["u_45", "u_201", "u_203", "u_310"],
+  "r_recall": 1.0,
+  "r_precision": 0.5,
+  "query_latency_ms": 34.2,
+  "ingestion_latency_ms": null
+}
 ```
 
-**将生成表格插入稿件：**
-```bash
-# 替换 manuscript.tex 中对应 \begin{tabular}...\end{tabular} 为 \input{generated/tab_xxx.tex}
-python experiments/patch_manuscript_tables.py
+Ingestion logs are saved separately, one per conversation per method:
+
+```json
+{
+  "experiment": "exp2",
+  "method": "mosaic",
+  "config": "S-1000",
+  "conversation_id": "syn_047",
+  "ingestion_latency_ms": 12340,
+  "peak_memory_mb": 842,
+  "graph_nodes": 312,
+  "graph_edges": 587,
+  "graph_communities": 14
+}
 ```
-编译稿件时请在 `Manuscript/` 目录下执行 `pdflatex manuscript.tex`，以便 `\input{generated/...}` 正确解析。
 
-**单实验：**
-- `python experiments/09_locomo/run_locomo.py [--max-questions N] [--skip-run]` — LoCoMo 完整表（DualGraph 运行或参考值 + 其余方法参考值）。
-- `python experiments/01_memory_gap/run.py [--use-locomo-proxy]` — 表 1 四域完整；可选 LoCoMo 代理覆盖 Hypertension 行。
-- `python experiments/02_baselines/run.py [--run-dualgraph-on-locomo]` — 表 2 七方法四域完整。
-- 03–08：`python experiments/0X_xxx/run.py` — 直接输出完整表与 LaTeX（使用 reference_values）。
-
-**数据与依赖：** 所有表格均由 `experiments/reference_values.py` 中的稿件一致数值填满；09（及 01/02 的 LoCoMo 代理）在具备 mosaic 依赖与 API 时可跑真实 DualGraph 并覆盖对应格。详见 `dataset/README.md`。
+All post-processing scripts (table generation, figure plotting, statistical tests) read from these log files. No re-running of experiments is needed to produce any table or figure — every output is derivable from the stored logs.

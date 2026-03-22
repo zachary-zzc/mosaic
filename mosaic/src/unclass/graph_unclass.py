@@ -9,6 +9,7 @@ from src.assist import (
     serialize_instance,
 )
 from src.logger import setup_logger
+from src.utils.io_utils import parse_llm_json_object, parse_llm_json_value
 from networkx import Graph
 from src.unclass.prompts_unclass import PROMPT_CREATE_INSTANCE_UNCLASS, PROMPT_UPDATE_INSTANCE
 
@@ -109,15 +110,19 @@ class InstanceGraph:
                 context_messages="\n".join([f"- {msg}" for msg in context])
             )
 
-            _logger.info(f"LLM创建实例提示词: {add_instance_prompt}")
+            _logger.debug("LLM创建实例提示词: %s", add_instance_prompt)
 
             response = self._llm.invoke(add_instance_prompt)
-            _logger.info(f"LLM创建实例响应: {response.content}")
-            result = json.loads(response.content)
-
-            # 处理LLM返回的新实例
-            new_instances = result
-            if not isinstance(new_instances, list):
+            raw = getattr(response, "content", None) or str(response)
+            _logger.debug("LLM创建实例响应: %s", raw)
+            parsed = parse_llm_json_value(raw)
+            if isinstance(parsed, list):
+                new_instances = parsed
+            else:
+                _logger.warning(
+                    "创建实例 LLM 回复无法解析为 JSON 数组，跳过新实例。原文前 500 字: %r",
+                    raw[:500],
+                )
                 new_instances = []
 
         _logger.info(f"最终结果: 需要更新的实例: {len(instances_to_update)}个, 需要新增的实例: {len(new_instances)}个")
@@ -154,7 +159,7 @@ class InstanceGraph:
                     fragment_instance_map[fragment_idx] = instance_idx
 
         if not instance_documents:
-            _logger.warning("没有可检索的实例片段")
+            _logger.debug("没有可检索的实例片段（常见于新实例尚未建立片段）")
             return []
 
         # 2. 计算TF-IDF相似度
@@ -270,10 +275,18 @@ class InstanceGraph:
             update_message="\n".join([f"- {msg}" for msg in messages]),
             instance=instance,
         )
-        _logger.info("ALIGN_UPDATE_PROMPT: %s", prompt[:200])
+        _logger.debug("ALIGN_UPDATE_PROMPT: %s", prompt[:200])
         response = self._llm.invoke(prompt)
-        _logger.info("ALIGN_UPDATE_RESPONSE: %s", response.content)
-        return json.loads(response.content)
+        raw = getattr(response, "content", None) or str(response)
+        _logger.debug("ALIGN_UPDATE_RESPONSE: %s", raw)
+        parsed = parse_llm_json_object(raw)
+        if parsed is not None:
+            return parsed
+        _logger.warning(
+            "更新实例 LLM 回复无法解析为 JSON 对象，保留原实例。原文前 500 字: %r",
+            raw[:500],
+        )
+        return dict(instance)
 
     def create_instances_from_messages(self, messages: List[str], context_messages: List[str]):
         """通过prompt从消息创建实例，消息分配已在prompt中处理"""
@@ -282,13 +295,19 @@ class InstanceGraph:
             context_messages="\n".join([f"- {msg}" for msg in context_messages])
         )
 
-        _logger.info(f"ALIGN_ADD_PROMPT: {align_add_prompt}")
+        _logger.debug("ALIGN_ADD_PROMPT: %s", align_add_prompt)
         response = self._llm.invoke(align_add_prompt)
-        _logger.info(f"ALIGN_ADD_RESPONSE: {response.content}")
+        raw = getattr(response, "content", None) or str(response)
+        _logger.debug("ALIGN_ADD_RESPONSE: %s", raw)
 
-        # 解析LLM返回的实例信息
-        instances_data = json.loads(response.content)
-        return instances_data
+        parsed = parse_llm_json_value(raw)
+        if isinstance(parsed, list):
+            return parsed
+        _logger.warning(
+            "创建实例 LLM 回复无法解析为 JSON 数组，返回空列表。原文前 500 字: %r",
+            raw[:500],
+        )
+        return []
 
     def _save_instances_snapshot(self) -> None:
         """保存实例快照到 results/instances/。"""

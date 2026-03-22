@@ -1,7 +1,7 @@
 """Shared QA evaluation logic for class-graph and instance-graph query scripts."""
 from __future__ import annotations
 
-import json
+import re
 from collections import defaultdict
 from string import Template
 from typing import Any, Callable, Dict, List
@@ -9,6 +9,7 @@ from typing import Any, Callable, Dict, List
 from src.assist import fetch_default_llm_model
 from src.logger import setup_logger
 from src.prompts_en import JUDGE_ANSWER
+from src.utils.io_utils import parse_llm_json_object
 
 try:
     from tqdm import tqdm
@@ -17,6 +18,38 @@ except ImportError:
         return iterable
 
 _logger = setup_logger("qa_common")
+
+
+def _label_from_judge_response(content: str | None) -> str:
+    """Parse judge JSON or infer CORRECT/WRONG from text; default WRONG if ambiguous."""
+    raw = (content or "").strip()
+    parsed = parse_llm_json_object(raw)
+    if parsed:
+        label = (parsed.get("label") or "").strip().upper()
+        if label in ("CORRECT", "WRONG"):
+            return label
+
+    m = re.search(r'"label"\s*:\s*"(CORRECT|WRONG)"', raw, re.IGNORECASE)
+    if m:
+        return m.group(1).upper()
+
+    # 纯文本：整段或最后一行恰好为 CORRECT / WRONG（避免 “not correct” 误匹配）
+    one = raw.strip().upper()
+    if one in ("CORRECT", "WRONG"):
+        return one
+    for line in reversed(raw.splitlines()):
+        line = line.strip()
+        if not line:
+            continue
+        u = line.upper()
+        if u in ("CORRECT", "WRONG"):
+            return u
+
+    _logger.warning(
+        "无法从 judge 回复解析 label（非 JSON 或为空），记为 WRONG。原文前 500 字: %r",
+        raw[:500],
+    )
+    return "WRONG"
 
 
 def judge_answer_llm(question: str, gold_answer: str, generated_answer: str) -> str:
@@ -28,9 +61,10 @@ def judge_answer_llm(question: str, gold_answer: str, generated_answer: str) -> 
     )
     llm = fetch_default_llm_model()
     response = llm.invoke(prompt)
-    _logger.info("JUDGE_ANSWER_RESPONSE %s", response.content)
-    judge_ans = json.loads(response.content)
-    return (judge_ans.get("label") or "").strip().upper()
+    _logger.debug("JUDGE_ANSWER_RESPONSE %s", response.content)
+    return _label_from_judge_response(
+        getattr(response, "content", None) or str(response)
+    )
 
 
 def run_qa_loop(
@@ -70,7 +104,7 @@ def run_qa_loop(
                 expected = str(expected).strip()
 
             answer = query_fn(question, memory)
-            _logger.info("expected_answer: %s; answer: %s", expected, answer)
+            _logger.debug("expected_answer: %s; answer: %s", expected, answer)
 
             label = judge_answer_llm(question, expected, answer)
             qa_item = {**qa_item, "generated_answer": answer, "judgment": label}

@@ -1,6 +1,6 @@
 import os
-import json
 from src.assist import read_to_file_json, save_to_file_json, fetch_default_llm_model
+from src.utils.io_utils import parse_llm_json_object
 from src.prompts_ch import PROMPT_CONFLICT_JUDGE
 from string import Template
 
@@ -96,7 +96,8 @@ def main():
 
                 try:
                     response = _llm.invoke(judge_prompt)
-                    result = json.loads(response.content)
+                    raw = getattr(response, "content", None) or str(response)
+                    result = parse_llm_json_object(raw)
                     match = result.get("label", False) if isinstance(result, dict) else False
                 except Exception as e:
                     print(f"⚠️ JSON解析或API调用错误: {e}")

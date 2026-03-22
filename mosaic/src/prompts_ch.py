@@ -13,42 +13,30 @@ PROMPT_NEW_CLASS_SENSE = """
 4. New category names should be clear and unambiguous for subsequent retrieval.
 5. Information completeness: All message fragments, except purely greeting messages, must be included in the output.
 
-## Output Format 
-Please strictly adhere to the following JSON format. This JSON must be correctly parsed by Python's `json.loads()`:
+## 输出
+返回包含字段 `new_classes`（数组）的一个 JSON 对象，示例：
 
 {
   "new_classes": [
     {
       "class_name": "The specific name of the new category",
       "related_message": [
-        {"message": "The context message content", "label": "The unique label ID corresponding to this context message"},
-        {"message": "The context message content", "label": "The unique label ID corresponding to this context message"}
+        {"message": "The context message content", "label": 1},
+        {"message": "The context message content", "label": 2}
       ]
     }
   ]
 }
 
-If no new category needs to be created, return：{"new_classes": []}
-
-OUTPUT FORMAT:
-1. Please return the entities as a JSON object.
-2. The JSON object should be able to be parsed by json.loads() in Python, and should not include any headers like ```json or```python.
-3. The return should ONLY be a valid JSON object, and should not contain any extra text or explanation.
+无需新类时：`{"new_classes": []}`。输出中保留各片段的 `label`。
 """
 
 PROMPT_TAGS = """
 你是一个专门用于文本分析的AI模型，擅长从给定文本中精准识别和提取核心关键词/关键短语。你的任务是分析用户提供的文本，提取下面文本的tags。
 文本：${TEXT}
 
-# 输出格式
-你必须返回一个 **JSON 对象**，格式如下：
-{
-  "keywords": ["关键词", "关键词", "关键词", ,,,, "关键词"]
-}
-1. All strings must be  English.
-2. Please return the entities as a JSON object.
-3. The JSON object should be able to parsed by json.loads() in Python, also do not include any header like ```json or ```python.
-4. The return be ONLY a valid JSON object, and should not contain any extra text or explanation.
+# 输出
+JSON 对象：`{"keywords": ["...", ...]}`（关键词字符串建议用英文）。
 """
 
 PROMPT_TAGS_QUERY = """
@@ -69,16 +57,8 @@ PROMPT_TAGS_QUERY = """
    - 语义相关性（如同义词、上下文关联）
    - 实例的典型性和代表性
 
-# 输出规范
-你必须**仅返回一个标准JSON数组**，格式如下：
-[
-  {"class_id": "class_1", "instance_id": "instance_1"},
-  {"class_id": "class_2", "instance_id": "instance_2"},
-  ...
-]
-1. Please return the entities as a JSON object.
-2. The JSON object should be able to parsed by json.loads() in Python, also do not include any header like ```json or ```python.
-3. The return be ONLY a valid JSON object, and should not contain any extra text or explanation.
+# 输出
+JSON 数组，元素形如 `{"class_id": "...", "instance_id": "..."}`（按相关性排序）。
 """
 COMMON_QUERY_RESPONSE_PROMPT = """
 你是一个信息整合与推理专家，擅长将特定信息与通用知识相结合以构建完整答案。
@@ -97,15 +77,8 @@ COMMON_QUERY_RESPONSE_PROMPT = """
     *   如果片段信息**不充分、模糊或完全缺失**，则基于公认的常识或世界事实，对缺失部分进行合乎逻辑的推理和补充。
 3.  **逻辑连贯性**：确保最终答案是一个将片段信息与常识推理**有机融合**的整体，逻辑通顺，直接回答问题。
 
-# 输出格式
-你必须返回一个 **JSON 对象**，且该对象必须包含以下字段：
-{
-  "response": "回答问题的答案"
-}
-
-1. Please return the entities as a JSON object.
-2. The JSON object should be able to parsed by json.loads() in Python, also do not include any header like ```json or ```python.
-3. The return be ONLY a valid JSON object, and should not contain any extra text or explanation.
+# 输出
+JSON 对象：`{"response": "回答问题的答案"}`。
 
 """
 
@@ -124,8 +97,8 @@ PROMPT_CONFLICT = """
 
 输入信息：${messages}
 
-# 输出格式
-你必须返回一个 **JSON 对象**，且该对象必须包含以下字段：
+# 输出
+JSON 对象，字段如下：
 {
   "is_conflict": true 或 false,
   "conflicts": [
@@ -139,10 +112,6 @@ PROMPT_CONFLICT = """
 ### 注意事项：
 - 如果没有冲突，`conflicts` 数组应为空。
 - 如果存在多处冲突，请在 `conflicts` 数组中逐一列出。
-
-1. Please return the entities as a JSON object.
-2. The JSON object should be able to parsed by json.loads() in Python, also do not include any header like ```json or ```python.
-3. The return be ONLY a valid JSON object, and should not contain any extra text or explanation.
 """
 
 PROMPT_CONFLICT_JUDGE = """
@@ -154,15 +123,8 @@ ${conflict_reason}
 error_data中的冲突表述
 ${error_data_str}
 
-# 输出格式
-你必须返回一个 **JSON 对象**，且该对象必须包含以下字段：
-{
-  "label": true 或 false
-}
-
-1. Please return the entities as a JSON object.
-2. The JSON object should be able to parsed by json.loads() in Python, also do not include any header like ```json or ```python.
-3. The return be ONLY a valid JSON object, and should not contain any extra text or explanation.
+# 输出
+JSON 对象：`{"label": true}` 或 `{"label": false}`。
 """
 
 PROMPT_QUERY_CLASSES="""
@@ -179,8 +141,7 @@ ${classes}
 3. 选择最能回答该问题的前${top_k}个最相关类
 4. 按相关性从高到低排序
 
-输出格式：
-请严格按照以下JSON格式输出结果：
+输出：一个 JSON 对象：
 {
     "selected_classes": [
         {
@@ -190,10 +151,6 @@ ${classes}
     ],
     "total_selected": ${top_k}
 }
-
-1. Please return the entities as a JSON object.
-2. The JSON object should be able to parsed by json.loads() in Python, also do not include any header like ```json or ```python.
-3. The return be ONLY a valid JSON object, and should not contain any extra text or explanation.
 """
 
 PROMPT_QUERY_TEMPLATE = """
@@ -227,15 +184,8 @@ PROMPT_QUERY_TEMPLATE = """
 根据内存中的时间戳，将“去年”转换为“2022”，或将“两个月前”转换为“2023年3月”。
 3. 如果具体日期难以推断，请提供相对时间描述。例如：2023年5月的最后一周。
 
-# 输出格式
-你必须返回一个 **JSON 对象**，且该对象必须包含以下字段：
-{
-  "response": "回答问题的答案"
-}
-
-1. Please return the entities as a JSON object.
-2. The JSON object should be able to parsed by json.loads() in Python, also do not include any header like ```json or ```python.
-3. The return be ONLY a valid JSON object, and should not contain any extra text or explanation.
+# 输出
+JSON 对象：`{"response": "回答问题的答案"}`。
 """
 
 
@@ -264,17 +214,7 @@ Generated answer: ${generated_answer}
 First, provide a short (one sentence) explanation of your reasoning, then finish with
 CORRECT or WRONG. Do NOT include both CORRECT and WRONG in your response, or it will break
 the evaluation script.
-Just return the label CORRECT or WRONG in a json format with the key as "label".
-
-# Output Format:
-{
-  "label": "CORRECT or WRONG"
-}
-
-# Output Format
-1. Please return the entities as a JSON object.
-2. The JSON object should be able to parsed by json.loads() in Python, also do not include any header like ```json or ```python.
-3. The return be ONLY a valid JSON object, and should not contain any extra text or explanation.
+最后输出 JSON：`{"label": "CORRECT"}` 或 `{"label": "WRONG"}`。
 """
 
 PROMPT_CLASS_SENSE = """
@@ -302,8 +242,8 @@ PROMPT_CLASS_SENSE = """
 
 **现有类别** (`${GRAPH_CLASSES}`)
 
-## Output Format & Rules
-你必须**严格**按照以下JSON格式输出结果。该JSON必须能被Python的 `json.loads()` 正确解析。
+## 输出
+JSON 对象，字段说明：
 
 - **`related_classes`** (数组): 列出与输入信息相关的现有类别。
     - `class_id`: (字符串) 现有的类别ID。
@@ -322,65 +262,24 @@ PROMPT_CLASS_SENSE = """
     - `dependent_context`: (数组) 来自对话历史，对于解释与此新类别相关的消息至关重要的上下文信息对象数组。每个对象必须包含：
         - `message`: (字符串) 上下文消息内容
         - `label`: (数字或字符串) 该上下文消息对应的唯一标签ID
-
-
-OUTPUT FORMAT:
-1. Please return the entities as a JSON object.
-2. The JSON object should be able to parsed by json.loads() in Python, also do not include any header like ```json or ```python.
-3. The return be ONLY a valid JSON object, and should not contain any extra text or explanation.
 """
 
 PROMPT_CREATE_INSTANCE="""
-您是一个具备深度时间感知能力的面向对象实例创建引擎。请根据提供的类别信息和相关消息片段，创建结构良好的实例，并特别关注与时间相关的信息
-**关键：忽略非实质性内容**，例如问候语（例如，“你好”）、赞美语（例如，“谢谢”）和纯粹的社交客套话。仅关注事实信息、操作、事件和实体属性。
+根据类别与消息创建结构化实例（需解析显式/隐含时间）。忽略问候与客套；保留事实、事件、实体。
 
-类别信息： ${class_node}
+**JSON**（接口 JSON 模式需提示词含此关键词。）
 
-- 相关消息片段:
+类别：${class_node}
+消息：
 ${related_messages}
-- 上文信息:
+上文：
 ${context_messages}
 
-# 核心原则
-- **清晰的属性**：定义明确的属性字段（例如，对于“人”对象，定义“姓名”和“年龄”；对于“事件”对象，定义“事件名称”和“参与者”）。
-- **灵活的存储**：使用`uninstance_field` 用于无法明确归类到标准属性的实质性内容信息。
-- **时间精度**：区分 `occurred`（事件实际发生的时间）和 `recorded_at`（事件在对话中被提及的时间）。
-- **深度时间感知**：您必须额外遵循以下时间处理原则：
-   主动识别并解析消息中所有明确提及（如“下周二下午三点”）和隐含（如“两天前”、“会议结束后”）的时间信息。
-- **消息标签追踪 **：必须将直接用于创建该实例的所有消息标签完整记录到 `message_labels` 字段中，确保信息可追溯。
+按需填充 `attributes` / `operations`（属性可含 description、value、occurred、recorded_at）；溢出文本放 `uninstance_field`；用到的消息标签写入 `message_labels`。
 
-**示例说明**
-假设使用label为3、5、7的消息创建了一个实例，则`message_labels`字段应为 [3, 5, 7]。这表示该实例是基于这三个消息片段的内容构建的
-
-# 输出格式
-严格遵循以下JSON数组格式：
-
-[
-  {
-    "instance_id": "o_<递增数字>",
-    "instance_name": "描述性实例名称",
-    "attributes": {
-      "attribute_key_1": {
-        "description": "属性描述",
-        "value": "提取的属性值或null",
-        "occurred": "信息单元发生相对时间或null",
-        "recorded_at": "对话日期或null"
-      }
-    },
-    "operations": {
-      "operation_name_1": {
-        "description": "相关操作描述"
-      }
-    },
-    "uninstance_field":"无法归入已定义属性的非结构化信息"
-    "message_labels": 直接贡献于该实例属性的所有消息的标签ID数组
-  }
-]
-
-OUTPUT FORMAT:
-1. Please return the entities as a JSON object.
-2. The JSON object should be able to parsed by json.loads() in Python, also do not include any header like ```json or ```python.
-3. The return be ONLY a valid JSON object, and should not contain any extra text or explanation.
+返回：
+{"instances": [ { "instance_id": "o_1", "instance_name": "...", "attributes": {}, "operations": {}, "uninstance_field": "", "message_labels": [] } ]}
+无实质内容时用 `"instances": []`。
 """
 
 PROMPT_UPDATE_INSTANCE="""
@@ -410,11 +309,5 @@ ${instance}
 - **标签提取**：检查实例的 `message_labels` 字段
 - **标签附加**：对于新出现的标签（不在现有 `message_labels` 中），必须将其添加到该字段
 - **标签去重**：确保 `message_labels` 中不出现重复的标签ID
-请输出更新后的实例节点，保持原结构不变。
-
-
-OUTPUT FORMAT:
-1. Please return the entities as a JSON object.
-2. The JSON object should be able to parsed by json.loads() in Python, also do not include any header like ```json or ```python.
-3. The return be ONLY a valid JSON object, and should not contain any extra text or explanation.
+输出：一个 JSON 对象，即更新后的完整实例（与输入实例结构、字段一致）。
 """

@@ -8,7 +8,7 @@
 
 ## DualGraph on LoCoMo（example/Locomo）
 
-使用 **hash 构图 + hash 检索**（不调用 LLM 构图/检索），仅回答与评判使用 Qwen（mosaic 中 `ali_api|qwen-max-latest`）。
+使用 **hash 构图 + hash 检索**（不调用 LLM 构图/检索），仅回答与评判使用 Qwen（mosaic 中 `ali_api|qwen3.5-plus`）。
 
 数据约定：长对话 `example/Locomo/locomo_conv0.json`，问答 `example/Locomo/qa_0.json`（可多对：`locomo_conv1.json` + `qa_1.json` 等）。
 
@@ -30,7 +30,7 @@ python experiments/02_baselines/step1_build_graph.py --all
 
 输出目录中会生成 `graph.pkl` 和 `tags.json`。构图时间较长，可后台跑。
 
-**步骤 2：仅 query + 打分**（读取已有图与 tags，对 qa 做 hash 检索 + Qwen 作答与评判）
+**步骤 2：仅 query + 打分**（读取已有图与 tags；**作答与对错评判均经 mosaic 与 `llm.py` 相同的 API**。检索默认 **hash**（与步骤 1 一致）；可用 `--method llm` 改为 LLM 检索。）
 
 ```bash
 # 方式 A：单组 qa + 图
@@ -40,11 +40,19 @@ python experiments/02_baselines/step2_qa_eval.py --single \
   --tags experiments/02_baselines/results/locomo_cache/conv_0/tags.json \
   --out experiments/02_baselines/results
 
+# 同上，但检索用 LLM（与 mosaic query method=llm 一致）
+python experiments/02_baselines/step2_qa_eval.py --single \
+  --qa example/Locomo/qa_0.json \
+  --graph .../graph.pkl \
+  --tags .../tags.json \
+  --out experiments/02_baselines/results \
+  --method llm
+
 # 方式 B：对 locomo_cache 下所有 conv_* 与对应 qa_*.json 逐对跑 QA
 python experiments/02_baselines/step2_qa_eval.py --all
 ```
 
-结果写入 `--out/dualgraph_qa_*_results.json` 与 `dualgraph_qa_*_summary.json`。可选 `--max-questions N` 限制题数。
+结果写入 `--out/dualgraph_qa_*_results.json`（逐题完整）与 `dualgraph_qa_*_summary.json`（按 category 与整体统计）。可选 `--max-questions N` 限制题数。
 
 **步骤 3（可选）：仅汇总写表**
 

@@ -11,8 +11,10 @@
     --tags experiments/02_baselines/results/locomo_cache/conv_0/tags.json \\
     --out experiments/02_baselines/results
 
-  结果写入 --out/dualgraph_qa_0_results.json 与 dualgraph_qa_0_summary.json。
+  结果写入 --out/dualgraph_qa_0_results.json（逐题完整）与 dualgraph_qa_0_summary.json（分类与整体统计）。
   若使用 --all，则对 locomo_cache 下每个 conv_* 与对应的 qa_*.json 跑一遍 QA。
+
+  与 example/Locomo/run_conv0_timed 一致：检索方式可用 --method llm（默认）或 hash；评判始终用 mosaic 同 API 的 LLM。
 """
 import os
 import sys
@@ -46,6 +48,12 @@ def main():
         help="结果输出目录，默认 experiments/02_baselines/results",
     )
     parser.add_argument("--max-questions", type=int, default=None, help="最多评估题目数，不指定则全部")
+    parser.add_argument(
+        "--method",
+        choices=("llm", "hash"),
+        default="hash",
+        help="检索方式：hash=TF-IDF（与 step1 hash 构图一致，默认）；llm=类感知+实例 LLM 检索。评判均为 LLM。",
+    )
     args = parser.parse_args()
 
     out_dir = args.out
@@ -74,7 +82,15 @@ def main():
             out_path = os.path.join(out_dir, f"dualgraph_qa_{idx}_results.json")
             sum_path = os.path.join(out_dir, f"dualgraph_qa_{idx}_summary.json")
             print(f"[{idx+1}/{len(pairs)}] QA: {os.path.basename(qa_path)}")
-            process_single_qa(qa_path, graph_path, tag_path, out_path, sum_path, max_questions=args.max_questions)
+            process_single_qa(
+                qa_path,
+                graph_path,
+                tag_path,
+                out_path,
+                sum_path,
+                max_questions=args.max_questions,
+                method=args.method,
+            )
         print("全部 QA 完成。")
         return 0
 
@@ -93,7 +109,15 @@ def main():
     base = os.path.splitext(os.path.basename(qa_path))[0]
     out_path = os.path.join(out_dir, f"dualgraph_{base}_results.json")
     sum_path = os.path.join(out_dir, f"dualgraph_{base}_summary.json")
-    process_single_qa(qa_path, graph_path, tag_path, out_path, sum_path, max_questions=args.max_questions)
+    process_single_qa(
+        qa_path,
+        graph_path,
+        tag_path,
+        out_path,
+        sum_path,
+        max_questions=args.max_questions,
+        method=args.method,
+    )
     print("QA 完成:", sum_path)
     return 0
 

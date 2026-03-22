@@ -82,6 +82,7 @@ def _run_dualgraph_on_locomo_example(results_dir, aggregate_only=False):
             out_path,
             sum_path,
             max_questions=None,
+            method="hash",
         )
 
     return _aggregate_locomo_summaries(results_dir)
@@ -118,7 +119,15 @@ def main():
             for idx, (qa_path, graph_path, tag_path) in enumerate(tqdm(pairs, desc="02 DualGraph")):
                 out_path = os.path.join(results_dir, f"dualgraph_qa_{idx}_results.json")
                 sum_path = os.path.join(results_dir, f"dualgraph_qa_{idx}_summary.json")
-                process_single_qa(qa_path, graph_path, tag_path, out_path, sum_path, max_questions=None)
+                process_single_qa(
+                    qa_path,
+                    graph_path,
+                    tag_path,
+                    out_path,
+                    sum_path,
+                    max_questions=None,
+                    method="hash",
+                )
             from experiments.run_utils import load_json_safe
             for name in os.listdir(results_dir):
                 if not name.endswith("_summary.json") or "dualgraph" not in name:

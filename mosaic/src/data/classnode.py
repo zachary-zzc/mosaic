@@ -98,7 +98,7 @@ class ClassNode:
                     instance_indices.append(idx)
 
         if not instance_documents:
-            _logger.warning("没有可检索的实例片段")
+            _logger.debug("没有可检索的实例片段（常见于新类尚无实例）")
             return []
 
         # 2. 计算TF-IDF相似度
@@ -129,15 +129,15 @@ class ClassNode:
         instance_scores = list(instance_max_scores.items())
         instance_scores.sort(key=lambda x: x[1], reverse=True)
 
-        _logger.info(f"TF-IDF实例检索: 总共{len(self._instances)}个实例，{len(instance_documents)}个片段，"
-                     f"找到{len(instance_scores)}个有匹配片段的实例")
+        _logger.debug("TF-IDF实例检索: 总共%d个实例，%d个片段，找到%d个有匹配片段的实例",
+                      len(self._instances), len(instance_documents), len(instance_scores))
 
         # 5. 过滤低于阈值的实例
         above_threshold = [(idx, score) for idx, score in instance_scores if score >= threshold]
         below_threshold = [(idx, score) for idx, score in instance_scores if score < threshold]
 
-        _logger.info(f"相似度统计: 高于阈值({threshold})实例数: {len(above_threshold)}, "
-                     f"低于阈值实例数: {len(below_threshold)}")
+        _logger.debug("相似度统计: 高于阈值(%.2f)实例数: %d, 低于阈值实例数: %d",
+                      threshold, len(above_threshold), len(below_threshold))
 
         # 6. 安全处理top_k_instance（确保是正整数）
         if top_k_instance <= 0:
@@ -148,7 +148,7 @@ class ClassNode:
         if len(above_threshold) >= top_k_instance:
             # 情况1: 高于阈值的实例足够
             selected_instance_scores = above_threshold[:top_k_instance]
-            _logger.info(f"高于阈值实例充足，直接返回前{len(selected_instance_scores)}个")
+            _logger.debug("高于阈值实例充足，直接返回前%d个", len(selected_instance_scores))
         # else:
         #     # 情况2: 高于阈值的实例不足，用低于阈值但分数最高的补足
         #     num_needed = top_k_instance - len(above_threshold)
@@ -219,16 +219,16 @@ class ClassNode:
         if unmatched_message_items:
             separated_messages_dict["messages"] = messages.copy()
             separated_messages_dict["context_messages"] = context_messages.copy()
-            _logger.info("检测到 %s 条未匹配消息，已分开存储 %s 条消息和 %s 条上下文消息",
-                         len(unmatched_message_items), len(messages), len(context_messages))
+            _logger.debug("检测到 %s 条未匹配消息，已分开存储 %s 条消息和 %s 条上下文消息",
+                          len(unmatched_message_items), len(messages), len(context_messages))
         else:
-            _logger.info("所有消息都已匹配到现有实例")
+            _logger.debug("所有消息都已匹配到现有实例")
 
         unmatched_messages_by_node: Dict[ClassNode, Dict[str, List]] = {self: separated_messages_dict}
 
-        _logger.info("识别到需要更新的实例数量: %s", len(instance_id_to_messages))
-        _logger.info("识别到需要新增的消息片段数量: %s (关联到类节点: %s)",
-                     len(unmatched_message_items), self.class_id)
+        _logger.debug("识别到需要更新的实例数量: %s", len(instance_id_to_messages))
+        _logger.debug("识别到需要新增的消息片段数量: %s (关联到类节点: %s)",
+                      len(unmatched_message_items), self.class_id)
 
         return instance_id_to_messages, unmatched_messages_by_node
 
@@ -270,7 +270,7 @@ class ClassNode:
                 updated_instance['messages'] = existing_messages + messages
             self._instances[found_index] = updated_instance
         self._class_formatter_by_instance()
-        _logger.info(f"已完成 {len(instance_id_to_messages)} 个实例的更新")
+        _logger.debug("已完成 %d 个实例的更新", len(instance_id_to_messages))
 
     def add_instances(self, unmatched_messages_by_node: Dict[ClassNode, Dict[str, List[str]]], use_hash: bool = False):
         """
@@ -289,7 +289,7 @@ class ClassNode:
             context_messages = messages_dict.get("context_messages", [])
 
             if not messages:
-                _logger.info("没有需要创建实例的消息")
+                _logger.debug("没有需要创建实例的消息")
                 continue
 
             if use_hash:
@@ -307,14 +307,14 @@ class ClassNode:
                 self._instances.append(instance)
                 current_instance_count += 1
                 instances_added += 1
-                _logger.info(f"已创建新实例: {instance['instance_id']} - {instance.get('instance_name', '未命名实例')}")
+                _logger.debug("已创建新实例: %s - %s", instance['instance_id'], instance.get('instance_name', '未命名实例'))
 
             # 如果有新增实例，重新格式化类
             if instances_added > 0:
                 self._class_formatter_by_instance()
-                _logger.info(f"成功添加 {instances_added} 个新实例到类 {self.class_id}")
+                _logger.debug("成功添加 %d 个新实例到类 %s", instances_added, self.class_id)
             else:
-                _logger.info("没有新增实例")
+                _logger.debug("没有新增实例")
 
     def _class_formatter_by_instance(self):
         """根据实例数据重新格式化类的属性、操作和未分类字段"""
@@ -350,8 +350,8 @@ class ClassNode:
 
             self.unclassified = set(uninstance_values)  # 或者保持字段名一致
 
-            _logger.info(
-                f"格式化完成: {len(self.attributes)} 个属性, {len(self.operations)} 个操作, {len(self.unclassified)} 个未分类字段")
+            _logger.debug("格式化完成: %d 个属性, %d 个操作, %d 个未分类字段",
+                         len(self.attributes), len(self.operations), len(self.unclassified))
 
         except Exception as e:
             _logger.error(f"格式化实例时发生错误: {e}")
@@ -368,8 +368,8 @@ class ClassNode:
                                          threshold: float,
                                          use_hash: bool = False) -> None:
         """根据消息初始化类节点属性与实例；新增类时仅会得到未匹配消息并创建新实例。"""
-        _logger.info("新节点信息: %s", messages)
-        _logger.info("新节点上下文: %s", context_messages)
+        _logger.debug("新节点信息: %s", messages)
+        _logger.debug("新节点上下文: %s", context_messages)
         instance_id_to_messages, unmatched_messages_by_node = self.get_message_allocation_from_instance(
             messages, context_messages, threshold=0.0)
         assert len(instance_id_to_messages) == 0, "new classnode should have no relevant instances"

@@ -4,6 +4,7 @@ from __future__ import annotations
 import ast
 import os
 from datetime import datetime
+from string import Template
 from typing import Dict, List, Any, Tuple
 
 from src.data.classnode import ClassNode
@@ -22,6 +23,7 @@ from src.assist import (
     load_graphs,
 )
 from src.utils.constants import DEFAULT_TFIDF_VECTORIZER_PARAMS, TFIDF_KEYWORD_MAX_DF
+from src.utils.io_utils import parse_llm_json_object, parse_llm_json_value
 from networkx import Graph
 import json
 import pickle
@@ -128,7 +130,7 @@ class ClassGraph:
             else:
                 unmatched_data.append(item)
 
-        _logger.info(
+        _logger.debug(
             f"TF-IDF匹配结果: 匹配到{len(relevant_class_messages)}个类，{len(processed_labels)}个信息片段，{len(unmatched_data)}个片段未匹配")
 
         # 第二阶段：对未匹配的片段使用LLM创建新类，或归入 Unclassified（hash 模式）
@@ -136,7 +138,7 @@ class ClassGraph:
 
         if unmatched_data:
             if use_llm_for_new:
-                _logger.info(f"对{len(unmatched_data)}个未匹配片段使用LLM创建新类")
+                _logger.debug(f"对{len(unmatched_data)}个未匹配片段使用LLM创建新类")
 
                 # 构建LLM提示词，只处理未匹配的片段
                 sense_prompt = Template(PROMPT_NEW_CLASS_SENSE).substitute(
@@ -146,33 +148,47 @@ class ClassGraph:
                     }
                 )
 
-                _logger.info(f"LLM感知提示词: {sense_prompt}")
+                _logger.debug(f"LLM感知提示词: %s", sense_prompt)
 
                 response = self._llm.invoke(sense_prompt)
-                _logger.info(f"LLM感知响应: {response.content}")
-                result = json.loads(response.content)
+                _logger.debug(f"LLM感知响应: %s", response.content)
+                result = parse_llm_json_object(response.content)
+                if result is None:
+                    _logger.warning(
+                        "LLM 新类感知返回无法解析为 JSON，未匹配片段已归入 Unclassified（见 prompt STRICT JSON 与 parse_llm_json_object）"
+                    )
+                    related = [
+                        {"message": item.get("message", ""), "label": item.get("label", "")}
+                        for item in unmatched_data
+                    ]
+                    new_class_messages["Unclassified"] = {
+                        "related_message": related,
+                        "dependent_context": context
+                        if isinstance(context, list)
+                        else ([context] if context else []),
+                    }
+                else:
+                    # 处理LLM返回的新类
+                    new_classes = result.get("new_classes", [])
+                    if not isinstance(new_classes, list):
+                        new_classes = []
 
-                # 处理LLM返回的新类
-                new_classes = result.get("new_classes", [])
-                if not isinstance(new_classes, list):
-                    new_classes = []
-
-                for item in new_classes:
-                    class_name = item.get("class_name")
-                    if class_name:
-                        new_class_messages[class_name] = {
-                            "related_message": item.get("related_message", []),
-                            "dependent_context": item.get("dependent_context", [])
-                        }
+                    for item in new_classes:
+                        class_name = item.get("class_name")
+                        if class_name:
+                            new_class_messages[class_name] = {
+                                "related_message": item.get("related_message", []),
+                                "dependent_context": item.get("dependent_context", []),
+                            }
             else:
                 # Hash 模式：全部归入 Unclassified，不调用 LLM
-                _logger.info(f"Hash 模式: 将{len(unmatched_data)}个未匹配片段归入 Unclassified")
+                _logger.debug(f"Hash 模式: 将{len(unmatched_data)}个未匹配片段归入 Unclassified")
                 related = [{"message": item.get("message", ""), "label": item.get("label", "")} for item in unmatched_data]
                 new_class_messages["Unclassified"] = {
                     "related_message": related,
                     "dependent_context": context if isinstance(context, list) else ([context] if context else []),
                 }
-        _logger.info(f"最终结果: 需要更新的相关类: {len(relevant_class_messages)}个, 需要新增的新类: {len(new_class_messages)}个")
+        _logger.debug(f"最终结果: 需要更新的相关类: {len(relevant_class_messages)}个, 需要新增的新类: {len(new_class_messages)}个")
         return relevant_class_messages, new_class_messages
 
     def process_relevant_class_instances(self,
@@ -207,9 +223,8 @@ class ClassGraph:
 
             processed_classes.append(class_node)
 
-            _logger.info(f"Processed class {class_id}: "
-                         f"found {len(relevant_instance_messages)} relevant instances, "
-                         f"{len(new_instance_messages)} new instances")
+            _logger.debug("Processed class %s: found %d relevant instances, %d new instances",
+                         class_id, len(relevant_instance_messages), len(new_instance_messages))
         self.save_graph_snapshot()
         return processed_classes
 
@@ -236,7 +251,7 @@ class ClassGraph:
                 use_hash=use_hash,
             )
             self.graph.add_node(class_node)
-            _logger.info(f"Added new class {class_id}: {class_name}")
+            _logger.debug("Added new class %s: %s", class_id, class_name)
             current_class_count += 1
             added_class_nodes.append(class_node)
 
@@ -288,7 +303,7 @@ class ClassGraph:
         with open(filename, 'w', encoding='utf-8') as f:
             json.dump(snapshot_data, f, indent=2, ensure_ascii=False)
 
-        _logger.info(f"图快照已保存: {filename}")
+        _logger.debug(f"图快照已保存: {filename}")
 
         # 2. 新增：保存整个图结构
         self._save_complete_graph(operation, timestamp)
@@ -297,7 +312,7 @@ class ClassGraph:
         filename = os.path.join(self._graph_save_dir, f"graph_edge_{operation}_{timestamp}.json")
         with open(filename, 'w', encoding='utf-8') as f:
             json.dump(self.edges, f, indent=2, ensure_ascii=False)
-        _logger.info(f"图边已保存: {filename}")
+        _logger.debug(f"图边已保存: {filename}")
 
     def _save_complete_graph(self, operation: str, timestamp: str) -> None:
         """
@@ -310,7 +325,7 @@ class ClassGraph:
         filename = os.path.join(self._graph_save_dir, f"graph_network_{operation}_{timestamp}.pkl")
         with open(filename, "wb") as f:
             pickle.dump(self.graph, f)
-        _logger.info(f"图完整结构已经保存 {filename}")
+        _logger.debug(f"图完整结构已经保存 {filename}")
 
     #为新增的类之间和更新的类之间加边
     def update_class_relationships(self,
@@ -337,7 +352,7 @@ class ClassGraph:
 
             # 存储与当前消息标签匹配的实例
             matching_instances = []
-            _logger.info(f"message_label:{message_label};data_item: {data_item}")
+            _logger.debug(f"message_label: %s; data_item: %s", message_label, data_item)
 
             # 在所有类节点中查找包含当前标签的实例
             for class_node in all_classes:
@@ -345,18 +360,18 @@ class ClassGraph:
                     continue
 
                 for instance_dict in class_node._instances:  # 重命名变量，明确它是字典
-                    #_logger.info(f"instance_dict: {instance_dict}")
-                    #_logger.info(f"instance_message_label: {instance_dict['message_labels']}")
+                    #_logger.debug(f"instance_dict: {instance_dict}")
+                    #_logger.debug(f"instance_message_label: {instance_dict['message_labels']}")
 
                     # 检查实例的message_labels是否包含当前标签
                     if message_label in instance_dict['message_labels']:
-                        # _logger.info(f"message_label matched: {message_label}")
+                        # _logger.debug(f"message_label matched: {message_label}")
                         matching_instances.append({
                             'class_node': class_node,
                             'instance': instance_dict
                         })
 
-            #_logger.info(f"matching_instances: {matching_instances}")
+            #_logger.debug(f"matching_instances: {matching_instances}")
 
             # 如果找到至少2个匹配的实例，则建立关联
             if len(matching_instances) >= 2:
@@ -401,11 +416,11 @@ class ClassGraph:
                     # 更新实例回类节点  classnode是指定的引用对象，会自动更新
                     #self._update_instance_in_class_node(current_class, current_instance)
 
-                _logger.info(f"为消息标签 {message_label} 建立了 {len(matching_instances)} 个实例间的关联")
+                _logger.debug(f"为消息标签 %s 建立了 %d 个实例间的关联", message_label, len(matching_instances))
 
         # 记录处理结果
-        _logger.info(f"关系更新完成：建立了 {len(self.edges)} 个关联边")
-        _logger.info(f"处理了 {len(data)} 条数据，涉及 {len(all_classes)} 个类节点")
+        _logger.debug(f"关系更新完成：建立了 {len(self.edges)} 个关联边")
+        _logger.debug(f"处理了 {len(data)} 条数据，涉及 {len(all_classes)} 个类节点")
 
         self.save_graph_snapshot()
 
@@ -481,9 +496,9 @@ class ClassGraph:
             classified_data["new_classes"][class_name] = new_class_data
 
         # 3. 记录分类结果用于调试
-        _logger.info(f"信息分类完成：")
-        _logger.info(f"- 已有类: {len(classified_data['existing_classes'])}")
-        _logger.info(f"- 新增类: {len(classified_data['new_classes'])}")
+        _logger.debug(f"信息分类完成：")
+        _logger.debug(f"- 已有类: {len(classified_data['existing_classes'])}")
+        _logger.debug(f"- 新增类: {len(classified_data['new_classes'])}")
 
         #对分类好的数据逐个检查
         self.detect_conflicts(classified_data)
@@ -510,10 +525,14 @@ class ClassGraph:
                             "messages": all_messages,
                         }
                     )
-                    _logger.info(f"conflict prompt: {conflict_prompt}")
+                    _logger.debug(f"conflict prompt: %s", conflict_prompt)
                     response = self._llm.invoke(conflict_prompt)
-                    _logger.info(f"conflict prompt response: {response.content}")
-                    result = json.loads(response.content)
+                    conflict_raw = getattr(response, "content", None) or str(response)
+                    _logger.debug(f"conflict prompt response: %s", conflict_raw)
+                    result = parse_llm_json_object(conflict_raw)
+                    if result is None:
+                        _logger.warning("冲突检测 LLM 回复无法解析为 JSON，跳过该 existing_class。")
+                        continue
 
                     if result.get("is_conflict", False):
                         # 获取所有冲突涉及的消息标签
@@ -546,10 +565,14 @@ class ClassGraph:
                             "messages": messages,
                         }
                     )
-                    _logger.info(f"conflict prompt: {conflict_prompt}")
+                    _logger.debug(f"conflict prompt: %s", conflict_prompt)
                     response = self._llm.invoke(conflict_prompt)
-                    _logger.info(f"conflict prompt response: {response.content}")
-                    result = json.loads(response.content)
+                    conflict_raw = getattr(response, "content", None) or str(response)
+                    _logger.debug(f"conflict prompt response: %s", conflict_raw)
+                    result = parse_llm_json_object(conflict_raw)
+                    if result is None:
+                        _logger.warning("冲突检测 LLM 回复无法解析为 JSON，跳过该 new_class。")
+                        continue
 
                     if result.get("is_conflict", False):
 
@@ -590,7 +613,9 @@ class ClassGraph:
         sensed_classes = self._sense_classes_by_llm(query, llm, top_k_class)
         _, instances_in_classes_str = self._fetch_instances_by_tfidf(query, top_k_instances, threshold=0.5,
                                                                      classes=sensed_classes)
-        combined_instances = keyword_matched_str + instances_in_classes_str
+        combined_instances = "\n\n".join(
+            s for s in (keyword_matched_str, instances_in_classes_str) if (s or "").strip()
+        )
         # 4. 清空已选实例集合，为下一次搜索做准备
         self.selected_instance_keys.clear()
 
@@ -628,12 +653,14 @@ class ClassGraph:
         sensed_classes = self._sense_classes_by_tfidf(query, top_k_class, threshold=0.6, allow_below_threshold=True)
         count_in_classes, instances_in_classes_str = self._fetch_instances_by_tfidf(
             query, top_k_instances, threshold=0.5, classes=sensed_classes)
-        _logger.info(f"第一阶段选择实例数量: {count_in_classes}")
+        _logger.debug(f"第一阶段选择实例数量: {count_in_classes}")
 
         count_global, instances_global_str = self._fetch_instances_by_tfidf(
             query, top_k_instances, threshold=0.1)
 
-        combined_instances = instances_global_str + instances_in_classes_str
+        combined_instances = "\n\n".join(
+            s for s in (instances_global_str, instances_in_classes_str) if (s or "").strip()
+        )
         #combined_instances = kw_coverage_instances + relv_ins + relevant_instances
 
         # 5. 清空已选实例集合，为下一次搜索做准备
@@ -659,16 +686,18 @@ class ClassGraph:
             top_k=top_k_class
         )
 
-        #_logger.info(f"QUERY_CLASSES_PROMPT: {query_classes_prompt}")
+        #_logger.debug(f"QUERY_CLASSES_PROMPT: {query_classes_prompt}")
         response = llm.invoke(query_classes_prompt)
-        _logger.info(f"QUERY_CLASSES_RESPONSE: {response.content}")
+        content = getattr(response, "content", None) or str(response)
+        _logger.debug(f"QUERY_CLASSES_RESPONSE: %s", content)
 
-        try:
-            query_results = json.loads(response.content)
+        query_results = parse_llm_json_object(content)
+        if query_results is not None:
+            if "selected_classes" not in query_results:
+                query_results["selected_classes"] = []
             return query_results
-        except json.JSONDecodeError as e:
-            _logger.error(f"解析类查询结果失败: {e}")
-            return {"error": "解析类查询结果失败", "selected_classes": []}
+        _logger.error("解析类查询结果失败: 非 JSON 或无法解析为对象")
+        return {"error": "解析类查询结果失败", "selected_classes": []}
 
     def _sense_classes_by_tfidf(self, query, top_k_class, threshold,allow_below_threshold=True):
         """
@@ -688,7 +717,7 @@ class ClassGraph:
         class_nodes = []  # 存储类节点
         class_info_map = {}  # 存储类索引到类信息的映射
 
-        _logger.info(f"开始构建类片段文本表示...")
+        _logger.debug("开始构建类片段文本表示...")
 
         # 遍历图中的所有类节点，构建每个类的片段文本表示
         class_idx = 0
@@ -737,7 +766,7 @@ class ClassGraph:
             _logger.warning("未找到任何类节点或类片段")
             return {"selected_classes": []}
 
-        _logger.info(f"TF-IDF类感知: 总共收集到 {len(class_nodes)} 个类，{len(class_fragments)} 个片段")
+        _logger.debug(f"TF-IDF类感知: 总共收集到 {len(class_nodes)} 个类，{len(class_fragments)} 个片段")
 
         # 2. 使用TF-IDF进行向量化和相似度计算
         similarities, vectorizer, tfidf_matrix = calculate_tfidf_similarity(
@@ -773,13 +802,13 @@ class ClassGraph:
         class_scores = list(class_max_scores.items())
         class_scores.sort(key=lambda x: x[1], reverse=True)
 
-        _logger.info(f"类相似度统计: 共{len(class_scores)}个类有匹配片段")
+        _logger.debug(f"类相似度统计: 共{len(class_scores)}个类有匹配片段")
 
         # 5. 按阈值过滤并选择类
         above_threshold = [(idx, score) for idx, score in class_scores if score >= threshold]
         below_threshold = [(idx, score) for idx, score in class_scores if score < threshold]
 
-        _logger.info(
+        _logger.debug(
             f"TF-IDF类感知: 高于阈值({threshold})的类数量: {len(above_threshold)}, 低于阈值的类数量: {len(below_threshold)}")
 
         # 6. 选择策略
@@ -789,7 +818,7 @@ class ClassGraph:
         if len(above_threshold) >= top_k_class:
             # 情况1: 高于阈值的类足够
             selected_class_scores = above_threshold[:top_k_class]
-            _logger.info(f"选择前{top_k_class}个高于阈值的类")
+            _logger.debug(f"选择前{top_k_class}个高于阈值的类")
         else:
             if allow_below_threshold:
                 # 情况2: 高于阈值的类不足，用低于阈值但分数最高的补足
@@ -800,11 +829,11 @@ class ClassGraph:
                 actual_slots = min(remaining_slots, len(below_threshold))
                 selected_class_scores = above_threshold + below_threshold[:actual_slots]
 
-                _logger.info(f"补充{actual_slots}个低于阈值但分数最高的类")
+                _logger.debug(f"补充{actual_slots}个低于阈值但分数最高的类")
             else:
                 # 情况3: 不允许使用低于阈值的类，只返回高于阈值的类
                 selected_class_scores = above_threshold
-                _logger.info(f"不允许使用低于阈值类，选择{len(selected_class_scores)}个高于阈值的类")
+                _logger.debug(f"不允许使用低于阈值类，选择{len(selected_class_scores)}个高于阈值的类")
 
         # 7. 构建返回结果
         selected_classes_info = []
@@ -827,8 +856,8 @@ class ClassGraph:
         # 记录最终选择结果
         class_names = [info['class_name'] for info in selected_classes_info]
         scores = [info['score'] for info in selected_classes_info]
-        _logger.info(f"TF-IDF最终选择的{len(selected_classes_info)}个类: {class_names}")
-        _logger.info(f"对应TF-IDF相似度分数: {scores}")
+        _logger.debug(f"TF-IDF最终选择的{len(selected_classes_info)}个类: {class_names}")
+        _logger.debug(f"对应TF-IDF相似度分数: {scores}")
 
         return {"selected_classes": selected_classes_info}
 
@@ -845,7 +874,7 @@ class ClassGraph:
             classes: 从_sense_classes_by_tfidf返回的相关类列表，如果为None则从所有类中收集
 
         Returns:
-            str: 相关实例列表
+            tuple[int, str]: (选中实例数量, 序列化后的相关实例文本)
         """
         # 1. 从相关类中收集所有实例及其片段
         all_instances = []  # 存储实例对象
@@ -855,7 +884,7 @@ class ClassGraph:
         instance_keys_map = {}  # 存储实例索引到唯一标识的映射
 
         if classes is None:
-            _logger.info(f"开始从所有类中收集实例片段...")
+            _logger.debug(f"开始从所有类中收集实例片段...")
             class_count = 0
             instance_count = 0
             fragment_count = 0
@@ -899,7 +928,7 @@ class ClassGraph:
 
                         # 为实例的每个片段构建文本表示
                         fragments = build_instance_fragments(instance)
-                       # _logger.info(f"实例的片段文本表示{fragments}")
+                       # _logger.debug(f"实例的片段文本表示{fragments}")
 
                         for fragment_type, fragment_text in fragments:
                             if fragment_text.strip():  # 只添加非空片段
@@ -915,11 +944,11 @@ class ClassGraph:
 
                                 fragment_count += 1
 
-            _logger.info(
+            _logger.debug(
                 f"从 {class_count} 个类中收集到 {instance_count} 个实例，共 {fragment_count} 个片段，"
                 f"跳过了 {len(self.selected_instance_keys)} 个已选中的实例")
         else:
-            _logger.info(f"开始从指定类中收集实例片段...")
+            _logger.debug(f"开始从指定类中收集实例片段...")
 
             # 遍历选中的类，从graph中查找对应的ClassNode并收集其实例
             for class_info in classes.get("selected_classes", []):
@@ -938,7 +967,7 @@ class ClassGraph:
 
                 # 获取该类的所有实例
                 class_instances = getattr(target_class_node, '_instances', [])
-                _logger.info(f"当前类下面的实例{class_instances}")
+                _logger.debug("当前类下面的实例: %s", class_instances)
 
                 for instance in class_instances:
                     instance_idx = len(all_instances)
@@ -963,11 +992,11 @@ class ClassGraph:
                     # 记录实例唯一标识
                     instance_keys_map[instance_idx] = instance_key
 
-                    _logger.info(f"用于去构建片段的实例{instance}")
+                    _logger.debug("用于去构建片段的实例: %s", instance)
                     # 为实例的每个片段构建文本表示
                     fragments = build_instance_fragments(instance)
 
-                    _logger.info(f"当前实例的片段{fragments}")
+                    _logger.debug("当前实例的片段: %s", fragments)
                     for fragment_type, fragment_text in fragments:
                        # if fragment_text.strip():  # 只添加非空片段
                         fragment_idx = len(instance_documents)
@@ -980,14 +1009,13 @@ class ClassGraph:
                             'fragment_text': fragment_text
                         }
 
-                _logger.info(
-                    f"从类 {class_id} 获取到 {len(class_instances)} 个实例，共 {len(instance_documents)} 个片段")
+                _logger.debug("从类 %s 获取到 %d 个实例，共 %d 个片段", class_id, len(class_instances), len(instance_documents))
 
         if not all_instances or not instance_documents:
             _logger.warning("未找到任何实例或实例片段")
-            return ""
+            return 0, ""
 
-        _logger.info(f"TF-IDF实例检索: 总共收集到 {len(all_instances)} 个实例，{len(instance_documents)} 个片段")
+        _logger.debug(f"TF-IDF实例检索: 总共收集到 {len(all_instances)} 个实例，{len(instance_documents)} 个片段")
 
         # 2. 使用TF-IDF进行向量化和相似度计算
         similarities, vectorizer, tfidf_matrix = calculate_tfidf_similarity(query, instance_documents)
@@ -1013,35 +1041,35 @@ class ClassGraph:
 
         if not instance_max_scores:
             _logger.warning("没有找到任何匹配的实例片段")
-            return ""
+            return 0, ""
 
         # 4. 将实例按最高相似度排序
         instance_scores = list(instance_max_scores.items())
         instance_scores.sort(key=lambda x: x[1], reverse=True)
 
-        _logger.info(f"实例相似度统计: 共{len(instance_scores)}个实例有匹配片段")
+        _logger.debug(f"实例相似度统计: 共{len(instance_scores)}个实例有匹配片段")
 
         # 5. 按阈值过滤并选择实例
         above_threshold = [(idx, score) for idx, score in instance_scores if score >= threshold]
         below_threshold = [(idx, score) for idx, score in instance_scores if score < threshold]
 
         log_msg = f"相似度统计: 高于阈值({threshold})实例数: {len(above_threshold)}, 低于阈值实例数: {len(below_threshold)}"
-        _logger.info(log_msg)
+        _logger.debug(log_msg)
 
         # 6. 根据新逻辑选择实例
         if top_k_instances <= 0:
-            return ""
+            return 0, ""
 
         above_count = len(above_threshold)
         selected_instance_scores = []
         if len(above_threshold) >= top_k_instances:
             # 情况1: 高于阈值的实例足够
             selected_instance_scores = above_threshold[:top_k_instances]
-            _logger.info(f"高于阈值实例充足，直接返回前{len(selected_instance_scores)}个")
+            _logger.debug(f"高于阈值实例充足，直接返回前{len(selected_instance_scores)}个")
         else:
             # 情况2: 高于阈值的实例不足
             num_needed = top_k_instances - above_count
-            _logger.info(f"高于阈值实例只有{above_count}个，需要从低于阈值实例中补充{num_needed}个")
+            _logger.debug(f"高于阈值实例只有{above_count}个，需要从低于阈值实例中补充{num_needed}个")
 
             # 计算可以从低于阈值实例中获取的最大数量
             available_below = len(below_threshold)
@@ -1050,7 +1078,7 @@ class ClassGraph:
                 # 有足够的低于阈值实例来补足
                 supplementary_instances = below_threshold[:num_needed]
                 selected_instance_scores = above_threshold + supplementary_instances
-                _logger.info(f"低于阈值实例充足，用{len(supplementary_instances)}个补足到{top_k_instances}个")
+                _logger.debug(f"低于阈值实例充足，用{len(supplementary_instances)}个补足到{top_k_instances}个")
             else:
                 # 低于阈值实例也不足，只能返回尽可能多的实例
                 supplementary_instances = below_threshold[:available_below]
@@ -1058,7 +1086,7 @@ class ClassGraph:
                 _logger.warning(
                     f"低于阈值实例也不足，只能返回{len(selected_instance_scores)}个实例，而不是期望的{top_k_instances}个")
 
-        _logger.info(f"最终选中的实例数量: {len(selected_instance_scores)}")
+        _logger.debug(f"最终选中的实例数量: {len(selected_instance_scores)}")
 
         # 7. 创建清理后的实例副本
         cleaned_instances = []
@@ -1100,11 +1128,11 @@ class ClassGraph:
 
             # 记录日志
             if classes is None:
-                _logger.info(f"选择实例 {instance_idx}: 最高相似度={score:.4f}, "
+                _logger.debug(f"选择实例 {instance_idx}: 最高相似度={score:.4f}, "
                              f"匹配片段类型={best_fragment.get('fragment_type', 'unknown')}, "
                              f"类={class_info.get('class_id', 'unknown')}")
             else:
-                _logger.info(f"选择实例 {instance_idx}: 相似度={score:.4f}, "
+                _logger.debug(f"选择实例 {instance_idx}: 相似度={score:.4f}, "
                              f"类={class_info.get('class_id', 'unknown')}, "
                              f"匹配片段类型={best_fragment.get('fragment_type', 'unknown')}")
 
@@ -1146,11 +1174,9 @@ class ClassGraph:
             stop_words='english',
             top_n=10  # 返回前10个关键词
         )
-        print("*********************keybert结果*************************")
-        print(keywords)
-        # 将(keyword, score)元组列表转换为仅包含关键词字符串的列表
+        _logger.debug("keybert 结果: keywords=%s", keywords)
         keyword_strings = keywords_process(keywords)
-        print(keyword_strings)
+        _logger.debug("keyword_strings=%s", keyword_strings)
         # 返回格式化的结果
         return {
             "keywords": keyword_strings,  # 仅包含关键词字符串的列表
@@ -1163,7 +1189,7 @@ class ClassGraph:
         仅用 TF-IDF 为图中每个实例生成关键词 tags（不调用 KeyBERT/LLM），并写入 filepath，同时设置 self.tags。
         """
         from sklearn.feature_extraction.text import TfidfVectorizer
-        from src.utils.constants import DEFAULT_TFIDF_VECTORIZER_PARAMS
+        from src.utils.constants import DEFAULT_TFIDF_VECTORIZER_PARAMS, tfidf_params_for_corpus_size
 
         tags = []
         doc_list = []
@@ -1189,7 +1215,9 @@ class ClassGraph:
                     json.dump([], f, indent=2, ensure_ascii=False)
             return
 
-        params = dict(DEFAULT_TFIDF_VECTORIZER_PARAMS)
+        params = tfidf_params_for_corpus_size(
+            dict(DEFAULT_TFIDF_VECTORIZER_PARAMS), len(doc_list)
+        )
         vectorizer = TfidfVectorizer(**params)
         X = vectorizer.fit_transform(doc_list)
         feature_names = vectorizer.get_feature_names_out()
@@ -1212,7 +1240,7 @@ class ClassGraph:
             os.makedirs(os.path.dirname(os.path.abspath(filepath)) or ".", exist_ok=True)
             with open(filepath, "w", encoding="utf-8") as f:
                 json.dump(tags, f, indent=2, ensure_ascii=False)
-        _logger.info("已生成 %s 条 TF-IDF tags 并写入 %s", len(tags), filepath)
+        _logger.debug("已生成 %s 条 TF-IDF tags 并写入 %s", len(tags), filepath)
 
     def find_keyword_relevant_instance_tags(self, query: str) -> str:
         tags_data = self.tags
@@ -1241,10 +1269,21 @@ class ClassGraph:
             "QUESTION": query,
             "TAGS": all_instance_info
         })
-        _logger.info(f"keywords_prompt: {find_keywords_prompt}")
+        _logger.debug(f"keywords_prompt: %s", find_keywords_prompt)
         response = self._llm.invoke(find_keywords_prompt)
-        print(f"keywords_prompt response: {response.content}")
-        instances_data = json.loads(response.content)
+        kw_content = getattr(response, "content", None) or str(response)
+        _logger.debug(f"keywords_prompt response: %s", kw_content)
+        parsed_kw = parse_llm_json_value(kw_content)
+        if isinstance(parsed_kw, list):
+            instances_data = parsed_kw
+        elif isinstance(parsed_kw, dict) and isinstance(parsed_kw.get("instances"), list):
+            instances_data = parsed_kw["instances"]
+        else:
+            _logger.warning(
+                "PROMPT_TAGS_QUERY 回复无法解析为 JSON 数组，跳过关键词实例补充。原文前 500 字: %r",
+                kw_content[:500],
+            )
+            instances_data = []
 
         # 将选中的实例添加到self.selected_instance_keys中
         added_instance_count = 0
@@ -1263,7 +1302,7 @@ class ClassGraph:
                 else:
                     _logger.debug(f"实例已存在于已选集合: {instance_key}")
 
-        _logger.info(f"已将 {added_instance_count} 个实例添加到已选实例集合中")
+        _logger.debug(f"已将 {added_instance_count} 个实例添加到已选实例集合中")
 
         relevant_instances = []
         for instance_info in instances_data:
@@ -1275,7 +1314,7 @@ class ClassGraph:
             else:
                 _logger.warning(f"Instance not found: class_id={class_id}, instance_id={instance_id}")
 
-        _logger.info(f"Found {len(relevant_instances)} relevant instances")
+        _logger.debug(f"Found {len(relevant_instances)} relevant instances")
         return serialize_instance(relevant_instances)
 
     def find_keyword_coverage_instances_with_tfidf(self, query_keywords, similarity_threshold=0.1,
@@ -1294,7 +1333,7 @@ class ClassGraph:
         """
         # 1. 读取tags文件数据
         tags_data = self.tags
-        _logger.info(f"成功加载 {len(tags_data)} 个tags数据")
+        _logger.debug(f"成功加载 {len(tags_data)} 个tags数据")
 
         # 2. 处理查询关键词
         if isinstance(query_keywords, str):
@@ -1309,10 +1348,10 @@ class ClassGraph:
             _logger.warning("查询关键词列表为空")
             return serialize_instance([])
 
-        _logger.info(f"查询关键词: {query_keywords}")
-        _logger.info(f"相似度阈值: {similarity_threshold}")
-        _logger.info(f"单个实例返回数量: {single_top_k}")
-        _logger.info(f"组合返回数量: {combo_top_k}")
+        _logger.debug(f"查询关键词: {query_keywords}")
+        _logger.debug(f"相似度阈值: {similarity_threshold}")
+        _logger.debug(f"单个实例返回数量: {single_top_k}")
+        _logger.debug(f"组合返回数量: {combo_top_k}")
 
         # 3. 准备数据结构和TF-IDF向量化
         instance_keywords_map = {}  # 组合键 -> 关键词列表
@@ -1348,7 +1387,7 @@ class ClassGraph:
             for keyword in keywords:
                 all_keywords_set.add(keyword)
 
-        _logger.info(f"总计 {len(all_keywords_set)} 个唯一关键词，排除 {excluded_count} 个已选实例")
+        _logger.debug(f"总计 {len(all_keywords_set)} 个唯一关键词，排除 {excluded_count} 个已选实例")
 
         if not all_keywords_set:
             _logger.warning("没有找到任何关键词")
@@ -1377,8 +1416,8 @@ class ClassGraph:
         # 转换为numpy数组以便后续计算
         import numpy as np
         similarity_matrix = np.array(similarity_matrix)
-        _logger.info(f"TF-IDF向量维度: {tfidf_matrix.shape}")
-        _logger.info(f"相似度矩阵形状: {similarity_matrix.shape}")
+        _logger.debug(f"TF-IDF向量维度: {tfidf_matrix.shape}")
+        _logger.debug(f"相似度矩阵形状: {similarity_matrix.shape}")
 
         # 6. 构建关键词到索引的映射
         keyword_to_index = {keyword: idx for idx, keyword in enumerate(keyword_docs)}
@@ -1402,11 +1441,11 @@ class ClassGraph:
 
             query_to_similar_keywords[query_keyword] = similar_keywords
 
-            _logger.info(f"查询关键词 '{query_keyword}' 找到 {len(similar_keywords)} 个相似关键词")
+            _logger.debug(f"查询关键词 '{query_keyword}' 找到 {len(similar_keywords)} 个相似关键词")
             if similar_keywords:
                 top_similar = similar_keywords[:3]
                 similarity_str = ', '.join([f"{item['keyword']}:{item['similarity']:.3f}" for item in top_similar])
-                _logger.info(f"  Top 3: {similarity_str}")
+                _logger.debug(f"  Top 3: {similarity_str}")
 
         # 8. 为每个查询关键词找到相关的实例
         query_to_instances = {}
@@ -1424,7 +1463,7 @@ class ClassGraph:
                         instances_for_query.add((instance_key, keyword, similarity))
 
             query_to_instances[query_keyword] = instances_for_query
-            _logger.info(f"查询关键词 '{query_keyword}': 找到 {len(instances_for_query)} 个相关实例")
+            _logger.debug(f"查询关键词 '{query_keyword}': 找到 {len(instances_for_query)} 个相关实例")
 
         # 9. 构建覆盖映射：每个实例覆盖哪些查询关键词
         instance_to_queries = {}
@@ -1443,10 +1482,10 @@ class ClassGraph:
                     'similarity': similarity
                 })
 
-        _logger.info(f"构建完成: {len(instance_to_queries)} 个实例至少匹配到一个查询关键词")
+        _logger.debug(f"构建完成: {len(instance_to_queries)} 个实例至少匹配到一个查询关键词")
 
         # 10. 跳过第一阶段，直接进入第二阶段
-        _logger.info("跳过第一阶段，直接进入第二阶段：贪心算法寻找最小覆盖组合")
+        _logger.debug("跳过第一阶段，直接进入第二阶段：贪心算法寻找最小覆盖组合")
 
         # 11. 第二阶段：贪心算法寻找覆盖所有查询关键词的实例组合
         all_combinations = []  # 存储所有找到的组合
@@ -1454,7 +1493,7 @@ class ClassGraph:
 
         # 为了找到多个组合，我们需要多次运行贪心算法
         for combo_idx in range(combo_top_k):
-            _logger.info(f"开始寻找第 {combo_idx + 1} 个组合...")
+            _logger.debug(f"开始寻找第 {combo_idx + 1} 个组合...")
 
             # 复制原始数据，用于当前组合的构建
             current_remaining_queries = set(query_keywords)
@@ -1507,7 +1546,7 @@ class ClassGraph:
 
                 # 选择最佳实例
                 current_selected_instances.append(best_instance)
-                _logger.info(f"第{iteration}轮贪心选择: 选择实例 {best_instance}, 覆盖 {best_coverage} 个新查询关键词")
+                _logger.debug(f"第{iteration}轮贪心选择: 选择实例 {best_instance}, 覆盖 {best_coverage} 个新查询关键词")
 
                 # 记录覆盖详情
                 coverage_details = []
@@ -1518,7 +1557,7 @@ class ClassGraph:
                             break
 
                 if coverage_details:
-                    _logger.info(f"  覆盖详情: {coverage_details}")
+                    _logger.debug(f"  覆盖详情: {coverage_details}")
 
                 # 更新已覆盖的查询
                 current_covered_queries.update(best_queries)
@@ -1546,11 +1585,11 @@ class ClassGraph:
                 _logger.warning(
                     f"达到最大迭代次数({max_iterations})，仍有未覆盖的查询关键词: {list(current_remaining_queries)}")
             elif not current_remaining_queries:
-                _logger.info(f"第 {combo_idx + 1} 个组合已完全覆盖所有查询关键词")
+                _logger.debug(f"第 {combo_idx + 1} 个组合已完全覆盖所有查询关键词")
             elif not current_instance_coverage_map:
                 _logger.warning(f"第 {combo_idx + 1} 个组合: 没有更多可选的实例来覆盖剩余查询关键词")
 
-            _logger.info(
+            _logger.debug(
                 f"第 {combo_idx + 1} 个组合结果: 选择 {len(current_selected_instances)} 个实例, 覆盖了 {len(current_covered_queries)}/{len(query_keywords)} 个查询关键词")
 
             if current_remaining_queries:
@@ -1558,7 +1597,7 @@ class ClassGraph:
 
             # 如果没有找到足够的实例，继续下一个组合
             if not current_selected_instances:
-                _logger.info(f"第 {combo_idx + 1} 个组合为空，停止寻找更多组合")
+                _logger.debug(f"第 {combo_idx + 1} 个组合为空，停止寻找更多组合")
                 break
 
             # 记录当前组合
@@ -1581,14 +1620,14 @@ class ClassGraph:
         if len(all_combinations) > combo_top_k:
             all_combinations = all_combinations[:combo_top_k]
 
-        _logger.info(f"第二阶段: 找到 {len(all_combinations)} 个有效组合")
+        _logger.debug(f"第二阶段: 找到 {len(all_combinations)} 个有效组合")
 
         # 12. 获取所有组合的完整实例数据
         all_instances = []
         instance_processed = set()  # 记录已处理的实例，避免重复
 
         for combo_idx, combo in enumerate(all_combinations):
-            _logger.info(f"处理第 {combo_idx + 1} 个组合，包含 {len(combo['instances'])} 个实例")
+            _logger.debug(f"处理第 {combo_idx + 1} 个组合，包含 {len(combo['instances'])} 个实例")
 
             combo_instances = []
 
@@ -1643,7 +1682,7 @@ class ClassGraph:
                     combo_instances.append(found_instance)
                     instance_processed.add(instance_key)
 
-                    _logger.info(
+                    _logger.debug(
                         f"组合 {combo_idx + 1} 实例 {instance_key}: 覆盖 {len(coverage_details)} 个查询, 平均相似度: {avg_similarity:.4f}")
                 else:
                     _logger.warning(f"未找到实例: {instance_key}")
@@ -1664,7 +1703,7 @@ class ClassGraph:
             remaining_queries = all_query_set - all_covered_queries
 
             if remaining_queries:
-                _logger.info(f"尝试为剩余 {len(remaining_queries)} 个查询关键词寻找额外实例...")
+                _logger.debug(f"尝试为剩余 {len(remaining_queries)} 个查询关键词寻找额外实例...")
 
                 # 为每个未覆盖的查询关键词找到最相关的实例
                 additional_instances = []
@@ -1729,7 +1768,7 @@ class ClassGraph:
 
                         all_instances.append(found_instance)
                         instance_processed.add(instance_key)
-                        _logger.info(f"添加额外实例 {instance_key}, 最高相似度: {similarity:.4f}")
+                        _logger.debug(f"添加额外实例 {instance_key}, 最高相似度: {similarity:.4f}")
 
         # 14. 将选中的实例添加到self.selected_instance_keys中
         added_instance_keys = []
@@ -1755,7 +1794,7 @@ class ClassGraph:
                 added_instance_keys.append(instance_key)
                 _logger.debug(f"添加实例到已选集合: {instance_key}")
 
-        _logger.info(f"已将 {len(added_instance_keys)} 个实例添加到已选实例集合中")
+        _logger.debug(f"已将 {len(added_instance_keys)} 个实例添加到已选实例集合中")
 
         # 15. 按阶段、组合索引、覆盖数量和相似度排序
         all_instances.sort(key=lambda x: (
@@ -1765,7 +1804,7 @@ class ClassGraph:
             -x.get('avg_similarity', 0)  # 相似度降序
         ))
 
-        _logger.info(f"最终返回 {len(all_instances)} 个相关实例")
+        _logger.debug(f"最终返回 {len(all_instances)} 个相关实例")
 
         return serialize_instance(all_instances)
 
