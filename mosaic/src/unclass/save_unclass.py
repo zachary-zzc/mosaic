@@ -1,10 +1,21 @@
 import json
 import os
 
+try:
+    from tqdm import tqdm
+except ImportError:
+    tqdm = None
+
 from src.unclass.graph_unclass import InstanceGraph
 from src.assist import conv_message_splitter, read_to_file_json
 from src.logger import setup_logger
 _logger = setup_logger("save")
+
+
+def _progress_bar(iterable, total: int, desc: str):
+    if tqdm is None or total <= 0:
+        return iterable
+    return tqdm(iterable, total=total, desc=desc, unit="batch", smoothing=0.08, mininterval=0.3)
 
 
 def _process_data_truncation(memory: InstanceGraph,
@@ -20,7 +31,7 @@ def _process_data_truncation(memory: InstanceGraph,
         top_k=None  # 可选，每个信息片段最多匹配的实例数，None 表示匹配所有超过阈值的
     )
 
-    _logger.info("instances_to_update: %s; new_instances: %s", instances_to_update, new_instances)
+    _logger.debug("instances_to_update: %s; new_instances: %s", instances_to_update, new_instances)
 
     #2 处理感知结果（更新旧实例，添加新实例到图）
     memory.process_instances(instances_to_update, new_instances)
@@ -42,18 +53,21 @@ def save(data,conv_name):
     memory = InstanceGraph()
     memory.filepath = conv_name
 
-    for i, (batch, context) in enumerate(result):
-    #if i > 17:
-        print(f"\n分组 {i + 1}:")
-        print("当前消息:", batch)
-        print("上文前三条:", context)
+    total = len(result)
+    pbar = _progress_bar(result, total, "构图(unclass)")
+    for i, (batch, context) in enumerate(pbar):
+        _logger.debug("构图进度: [%d/%d] 处理本组 %d 条消息", i + 1, total, len(batch))
+        _logger.debug("当前消息: %s; 上文: %s", batch, context[:3] if context else [])
         memory = _process_data_truncation(memory, batch, context)
+        if hasattr(pbar, "set_postfix"):
+            pbar.set_postfix(n=len(memory.graph.nodes))
+    _logger.info("构图完成")
     return memory
 
 
 def process_single_conv(file_path):
     """处理单个conv文件"""
-    print(f"处理文件: {file_path}")
+    _logger.info("处理文件: %s", file_path)
 
     # 提取conv名称（例如从"locomo_conv9.json"中提取"conv9"）
     file_name = os.path.basename(file_path)
@@ -88,10 +102,10 @@ def process_all_convs():
     # conv_files = glob(file_pattern)
 
     if not conv_files:
-        print(f"未找到匹配的文件: {file_pattern}")
+        _logger.info("未找到匹配的文件: %s", file_pattern)
         return
 
-    print(f"找到 {len(conv_files)} 个conv文件: {conv_files}")
+    _logger.info("找到 %d 个 conv 文件，开始构图", len(conv_files))
 
     # 处理每个文件
     results = {}

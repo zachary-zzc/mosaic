@@ -1,6 +1,11 @@
 import json
 import os
 
+try:
+    from tqdm import tqdm
+except ImportError:
+    tqdm = None
+
 from src.data.graph import ClassGraph
 from src.assist import (
     conv_message_splitter,
@@ -12,22 +17,74 @@ from src.logger import setup_logger
 _logger = setup_logger("save")
 
 
+def _progress_bar(iterable, total: int, desc: str):
+    """构图主 stdout：批次进度条（与主程序按批存储一致）。"""
+    if tqdm is None or total <= 0:
+        return iterable
+    return tqdm(
+        iterable,
+        total=total,
+        desc=desc,
+        unit="batch",
+        smoothing=0.08,
+        mininterval=0.3,
+    )
+
+
+def _twrite(msg: str) -> None:
+    """在 tqdm 运行时安全输出一行摘要（不破坏进度条）。"""
+    if tqdm is not None:
+        tqdm.write(msg)
+    else:
+        print(msg)
+
+
+def _conversation_message_totals(result: list) -> tuple[int, list[int]]:
+    """返回 (全部分组内对话消息总条数, 每批条数列表)。"""
+    sizes = [len(batch) for batch, _ in result]
+    return sum(sizes), sizes
+
+
+def _write_construction_progress(
+    current_1based: int,
+    total_batches: int,
+    *,
+    messages_done: int | None = None,
+    total_messages: int | None = None,
+) -> None:
+    """
+    若设置环境变量 MOSAIC_PROGRESS_FILE，写入批次与（可选）消息级进度。
+    messages_done: 已完成处理的对话消息条数（累计）
+    """
+    path = os.environ.get("MOSAIC_PROGRESS_FILE")
+    if not path or total_batches <= 0:
+        return
+    try:
+        pct_b = 100.0 * current_1based / total_batches
+        lines = [f"batches {current_1based}/{total_batches} ({pct_b:.1f}%)"]
+        if total_messages is not None and total_messages > 0 and messages_done is not None:
+            pct_m = 100.0 * messages_done / total_messages
+            rem = total_messages - messages_done
+            lines.append(f"messages {messages_done}/{total_messages} ({pct_m:.1f}%) remaining {rem}")
+        with open(path, "w", encoding="utf-8") as f:
+            f.write("\n".join(lines) + "\n")
+    except OSError:
+        pass
+
+
 def _process_data_truncation(memory: ClassGraph,
                              data: list,
                              context: list
                              ) -> ClassGraph:
     relevant_class_messages, new_class_messages = memory.sense_classes(data, context)
-    _logger.info("relevant_class_messages: %s; new_class_messages: %s", relevant_class_messages, new_class_messages)
-
-    # 可选: memory.consistency_valid_dynamic(relevant_class_messages, new_class_messages)
+    _logger.debug("relevant_class_messages: %s; new_class_messages: %s", relevant_class_messages, new_class_messages)
 
     processed_classes = memory.process_relevant_class_instances(relevant_class_messages)
-    _logger.info("processed_classes: %s", processed_classes)
+    _logger.debug("processed_classes: %s", processed_classes)
 
     added_class_nodes = memory.add_classnodes(new_class_messages)
-    _logger.info("added_class_nodes: %s", added_class_nodes)
+    _logger.debug("added_class_nodes: %s", added_class_nodes)
 
-    # #4.处理类内的边关系和类间的边关系
     memory.update_class_relationships(data, processed_classes, added_class_nodes)
 
 #     # # step 5: 图的冲突检测和消息传递
@@ -41,15 +98,15 @@ def _process_data_truncation_hash(memory: ClassGraph, data: list, context: list)
     relevant_class_messages, new_class_messages = memory.sense_classes(
         data, context, use_llm_for_new=False
     )
-    _logger.info("relevant_class_messages: %s; new_class_messages: %s", relevant_class_messages, new_class_messages)
+    _logger.debug("relevant_class_messages: %s; new_class_messages: %s", relevant_class_messages, new_class_messages)
 
     processed_classes = memory.process_relevant_class_instances(
         relevant_class_messages, use_hash=True
     )
-    _logger.info("processed_classes: %s", processed_classes)
+    _logger.debug("processed_classes: %s", processed_classes)
 
     added_class_nodes = memory.add_classnodes(new_class_messages, use_hash=True)
-    _logger.info("added_class_nodes: %s", added_class_nodes)
+    _logger.debug("added_class_nodes: %s", added_class_nodes)
 
     memory.update_class_relationships(data, processed_classes, added_class_nodes)
     return memory
@@ -70,12 +127,32 @@ def save_error(data):
     # 需要提前建立好message_labes数组，因为要记录下error涉及到哪些信息label,去查找具体的信息
     memory.message_labels = message_labels
 
-    for i, (batch, context) in enumerate(result):
+    total = len(result)
+    total_msgs, _ = _conversation_message_totals(result)
+    done_before = 0
+    pbar = _progress_bar(result, total, "构图(error)")
+    for i, (batch, context) in enumerate(pbar):
         if i > 80:
-            print(f"\n分组 {i + 1}:")
-            print("当前消息:", batch)
-            print("上文前三条:", context)
+            n = len(batch)
+            k, pct_b = i + 1, 100.0 * (i + 1) / total
+            done_after = done_before + n
+            pct_m = 100.0 * done_after / total_msgs if total_msgs else 0.0
+            rem = total_msgs - done_after
+            _logger.debug(
+                "构图进度: 批 [%d/%d] %.1f%% | 对话消息 本批 %d 条，此前已处理 %d/%d，本批完成后 %d/%d (%.1f%%)，尚余 %d 条",
+                k, total, pct_b, n, done_before, total_msgs, done_after, total_msgs, pct_m, rem,
+            )
+            _logger.debug("当前消息: %s; 上文前三条: %s", batch, context[:3] if context else [])
             memory = _process_data_truncation(memory, batch, context)
+            _write_construction_progress(k, total, messages_done=done_after, total_messages=total_msgs)
+            done_before = done_after
+            if hasattr(pbar, "set_postfix"):
+                pbar.set_postfix(
+                    msg=f"{done_after}/{total_msgs}",
+                    n_cls=len(memory.graph.nodes),
+                )
+    if total:
+        _write_construction_progress(total, total, messages_done=total_msgs, total_messages=total_msgs)
     return memory
 
 
@@ -87,12 +164,34 @@ def save(data, conv_name):
     memory = ClassGraph()
     memory.filepath = conv_name
 
-    for i, (batch, context) in enumerate(result):
-    #if i > 17:
-        print(f"\n分组 {i + 1}:")
-        print("当前消息:", batch)
-        print("上文前三条:", context)
+    total = len(result)
+    total_msgs, _ = _conversation_message_totals(result)
+    _logger.info("构图开始: 共 %d 个批次，合计 %d 条对话消息", total, total_msgs)
+    _twrite(f"构图开始: {total} 批次，合计 {total_msgs} 条对话消息（每批最多 10 条，与主程序 conv_message_splitter 一致）")
+
+    done_before = 0
+    pbar = _progress_bar(result, total, "构图")
+    for i, (batch, context) in enumerate(pbar):
+        n = len(batch)
+        k, pct_b = i + 1, 100.0 * (i + 1) / total
+        done_after = done_before + n
+        pct_m = 100.0 * done_after / total_msgs if total_msgs else 0.0
+        rem = total_msgs - done_after
+        _logger.debug(
+            "构图进度: 批 [%d/%d] %.1f%% | 对话消息 本批 %d 条，此前已处理 %d/%d，本批完成后 %d/%d (%.1f%%)，尚余 %d 条 → 当前类数: %d",
+            k, total, pct_b, n, done_before, total_msgs, done_after, total_msgs, pct_m, rem,
+            len(memory.graph.nodes),
+        )
+        _logger.debug("当前消息: %s; 上文: %s", batch, context[:3] if context else [])
         memory = _process_data_truncation(memory, batch, context)
+        _write_construction_progress(k, total, messages_done=done_after, total_messages=total_msgs)
+        done_before = done_after
+        if hasattr(pbar, "set_postfix"):
+            pbar.set_postfix(msgs=f"{done_after}/{total_msgs}", n_cls=len(memory.graph.nodes))
+    if total:
+        _write_construction_progress(total, total, messages_done=total_msgs, total_messages=total_msgs)
+    _logger.info("构图完成: 共 %d 个类，累计处理对话消息 %d 条", len(memory.graph.nodes), total_msgs)
+    _twrite(f"构图完成: {len(memory.graph.nodes)} 个类，累计 {total_msgs} 条对话消息")
     return memory
 
 
@@ -107,9 +206,33 @@ def save_hash(data, conv_name, graph_save_dir=None, final_graph_path=None, final
     memory.filepath = conv_name
     if graph_save_dir is not None:
         memory._graph_save_dir = graph_save_dir
-    for i, (batch, context) in enumerate(result):
-        _logger.info("分组 %s: 当前消息数 %s", i + 1, len(batch))
+    total = len(result)
+    total_msgs, _ = _conversation_message_totals(result)
+    _logger.info("构图开始(hash): 共 %d 个批次，合计 %d 条对话消息", total, total_msgs)
+    _twrite(f"构图开始(hash): {total} 批次，合计 {total_msgs} 条对话消息")
+
+    done_before = 0
+    pbar = _progress_bar(result, total, "构图(hash)")
+    for i, (batch, context) in enumerate(pbar):
+        n = len(batch)
+        k, pct_b = i + 1, 100.0 * (i + 1) / total
+        done_after = done_before + n
+        pct_m = 100.0 * done_after / total_msgs if total_msgs else 0.0
+        rem = total_msgs - done_after
+        _logger.debug(
+            "构图进度: 批 [%d/%d] %.1f%% | 对话消息 本批 %d 条，此前已处理 %d/%d，本批完成后 %d/%d (%.1f%%)，尚余 %d 条 → 当前类数: %d",
+            k, total, pct_b, n, done_before, total_msgs, done_after, total_msgs, pct_m, rem,
+            len(memory.graph.nodes),
+        )
         memory = _process_data_truncation_hash(memory, batch, context)
+        _write_construction_progress(k, total, messages_done=done_after, total_messages=total_msgs)
+        done_before = done_after
+        if hasattr(pbar, "set_postfix"):
+            pbar.set_postfix(msgs=f"{done_after}/{total_msgs}", n_cls=len(memory.graph.nodes))
+    if total:
+        _write_construction_progress(total, total, messages_done=total_msgs, total_messages=total_msgs)
+    _logger.info("构图完成: 共 %d 个类，累计处理对话消息 %d 条", len(memory.graph.nodes), total_msgs)
+    _twrite(f"构图完成: {len(memory.graph.nodes)} 个类，累计 {total_msgs} 条对话消息")
     if final_graph_path:
         import pickle
         os.makedirs(os.path.dirname(os.path.abspath(final_graph_path)) or ".", exist_ok=True)
@@ -123,7 +246,7 @@ def save_hash(data, conv_name, graph_save_dir=None, final_graph_path=None, final
 
 def process_single_conv(file_path):
     """处理单个conv文件"""
-    print(f"处理文件: {file_path}")
+    _logger.info("处理文件: %s", file_path)
 
     # 提取conv名称（例如从"locomo_conv9.json"中提取"conv9"）
     file_name = os.path.basename(file_path)
@@ -153,10 +276,10 @@ def process_all_convs():
 
 
     if not conv_files:
-        print(f"未找到匹配的文件: {file_pattern}")
+        _logger.info("未找到匹配的文件: %s", file_pattern)
         return
 
-    print(f"找到 {len(conv_files)} 个conv文件: {conv_files}")
+    _logger.info("找到 %d 个 conv 文件，开始构图", len(conv_files))
 
     # 处理每个文件
     results = {}

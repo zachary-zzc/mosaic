@@ -1,4 +1,5 @@
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Sequence, Union
+import os
 import re
 import json
 import pickle
@@ -11,8 +12,10 @@ from string import Template
 
 from src.llm.llm import load_chat_model
 from src.logger import setup_logger
+from src.config_loader import get_embedding_model_path
 from src.utils.constants import DEFAULT_TFIDF_VECTORIZER_PARAMS
 from src.utils import io_utils as _io
+from src.utils.io_utils import parse_llm_json_object
 
 _logger = setup_logger("graph assist")
 
@@ -20,7 +23,7 @@ _logger = setup_logger("graph assist")
 
 #用这样的方式去加载调用的api
 def fetch_default_llm_model():
-    return load_chat_model("ali_api|qwen-max-latest")
+    return load_chat_model("ali_api|qwen3.5-plus")
     #return load_chat_model("ali_api|deepseek-r1")
 
 def build_class_fragments(class_node):
@@ -290,21 +293,35 @@ def serialize_instance(data):
 
 
 #查询问题
-def query_question(llm, 
-                   question: str, 
-                   information: List[str],
-                   prompt_template: str) -> str:
+def query_question(
+    llm,
+    question: str,
+    information: Union[str, Sequence[str]],
+    prompt_template: str,
+) -> str:
     #用来确认这些条件为真，否则触发异常
     assert("{QUESTION}" in prompt_template and "{INFORMATION}" in prompt_template), \
         "Prompt template must contain {QUESTION} and {INFORMATION} placeholders."
+    if isinstance(information, (list, tuple)):
+        info_str = "\n\n".join(str(x) for x in information if str(x).strip())
+    else:
+        info_str = str(information or "")
     prompt = Template(prompt_template).substitute(
-        {"QUESTION": question, "INFORMATION": information}
+        {"QUESTION": question, "INFORMATION": info_str}
     )
-    _logger.info(f"query prompt: {prompt}")
+    _logger.debug("query prompt: %s", prompt)
     response = llm.invoke(prompt)
-    answer = json.loads(response.content)
-    # print(update_single_node)
-    return answer.get("response", None)
+    content = getattr(response, "content", None) or str(response)
+    parsed = parse_llm_json_object(content)
+    if parsed is not None:
+        ans = parsed.get("response")
+        if ans is not None:
+            return str(ans).strip()
+    _logger.warning(
+        "query_question: 无法从 LLM 回复解析 JSON 对象或缺少 response 字段，返回空串。原文前 500 字: %r",
+        content[:500],
+    )
+    return ""
 
 
 
@@ -485,9 +502,25 @@ def calculate_cosine_similarity(vec1, vec2):
 
     return dot_product / (norm_vec1 * norm_vec2)
 
-LOCAL_MODEL_PATH = "./embedding_models/all-MiniLM-L6-v2"
-embedding_model = SentenceTransformer(LOCAL_MODEL_PATH)
-print("嵌入模型加载成功")
+_embedding_model = None
+
+
+def _get_embedding_model():
+    """懒加载本地 SentenceTransformer，路径来自 config [PATHS] 或环境变量（绝对路径）。"""
+    global _embedding_model
+    if _embedding_model is None:
+        path = get_embedding_model_path()
+        if not os.path.isdir(path):
+            raise FileNotFoundError(
+                f"嵌入模型目录不存在: {path}\n"
+                "请在 mosaic/config/config.cfg 的 [PATHS] embedding_model 中配置绝对路径，"
+                "或设置环境变量 MOSAIC_EMBEDDING_MODEL，或将模型放到该目录。"
+            )
+        _embedding_model = SentenceTransformer(path)
+        _logger.debug("嵌入模型已加载: %s", path)
+    return _embedding_model
+
+
 def similarity_score(text1: str, text2: str) -> float:
     """
     计算两个文本之间的余弦相似度
@@ -499,8 +532,9 @@ def similarity_score(text1: str, text2: str) -> float:
     Returns:
         float: 两个文本的余弦相似度得分，范围[0, 1]
     """
-    text1_vec = embedding_model.encode(text1)
-    text2_vec = embedding_model.encode(text2)
+    model = _get_embedding_model()
+    text1_vec = model.encode(text1)
+    text2_vec = model.encode(text2)
 
     # 从相似度矩阵中提取标量值
     cosine_score = calculate_cosine_similarity(text1_vec,text2_vec)
