@@ -8,7 +8,7 @@
 |------|------|
 | **mosaic/** | 主程序：基于 OOP 的图结构对话记忆管理与查询 |
 | **Manuscript/** | 论文稿件（LaTeX） |
-| **experiments/** | 为填满稿件 placeholder 所需的实验清单与子任务（见 [experiments/README.md](experiments/README.md)） |
+| **experiments/** | MOSAIC 对话记忆评测三项实验（LoCoMo / 可扩展性 / 消融）；见 [experiments/README.md](experiments/README.md) |
 | **dataset/** | 数据集说明与来源（LOCOMO、HaluMem 等；见 [dataset/README.md](dataset/README.md)） |
 | **docs/** | 稿件填充说明：placeholder 索引、图表规格、填充顺序（见 `docs/*.md`） |
 

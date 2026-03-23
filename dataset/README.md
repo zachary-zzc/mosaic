@@ -10,7 +10,7 @@
 
 - **用途**：长程对话记忆评估（单跳、多跳、时序查询），用于 **Appendix LoCoMo** 及主文对记忆模块的引用。
 - **在本项目中的位置**：程序侧见 `mosaic/src/locomo results/`（对话、图、QA 等运行结果）；**原始基准数据与评估协议**需按 LoCoMo 官方发布获取（论文/代码库中的 split、指标定义）。
-- **实验**：`experiments/09_locomo`（填 Table LoCoMo、分析段落及 `locomo_ref` 引用）。
+- **实验**：`experiments/01_locomo_benchmark`（主 LoCoMo 表、分类与检索指标；见 `experiments/README.md`）。
 - **备注**：Manuscript 称使用“标准化 LoCoMo 协议”以便与 Mem0 等公平对比；若与 Mem0 官方采用的 LoCoMo 设置不同，需在文中明确说明。
 
 ### 2. HaluMem
@@ -91,15 +91,13 @@ dataset/
 
 ## 与 experiments/ 的对应
 
+当前 `experiments/` 仅保留与 **MOSAIC 对话记忆评测** 相关的三项实验（详见 `experiments/README.md`）：
+
 | 实验目录 | 主要数据依赖 |
 |----------|--------------|
-| 01_memory_gap, 02_baselines | 四域 case profiles（Hypertension, Diabetes, D3, D4） |
-| 03_evolving_dag | 同上 + 涌现实体标注 |
-| 04_ncs_mechanism, 05_ablation | Hypertension（+ 消融 58 例） |
-| 06_graph_construction | 四域任务说明 + 专家图 + 审阅记录；evaluation cases 同 01/02 |
-| 07_downstream | DrHyper 200 例；Diabetes [N]；D3/D4 下游标签 |
-| 08_pilot | 真实患者、IRB、试点协议 |
-| 09_locomo | LoCoMo 基准 + 标准协议 |
+| `01_locomo_benchmark` | LoCoMo（10 段多会话对话 + QA）；程序侧结果见 `mosaic/src/locomo results/` |
+| `02_scalability` | 合成对话（S-100 … S-2000，按实验指南生成） |
+| `03_ablation` | 与 Exp 1 相同 LoCoMo；在 MOSAIC 内开关组件后重跑 |
 | （可选）HaluMem | HaluMem 数据集 + eval 脚本 |
 
-若某实验需要**额外**数据集（例如新的非医疗域、新的下游任务），在本 README 对应小节或该实验的 `experiments/xx_*/README.md` 中补充说明即可。
+若某实验需要**额外**数据集，在本 README 对应小节或该实验目录下的 `README.md` 中补充说明即可。

@@ -55,7 +55,7 @@ python run.py
 - **stdout**：任务控制信息（含 `mosaic build` 的 tqdm）。  
 - **`--verbose-log`**：`log/run_verbose.log` + 子进程 `mosaic -v`。
 
-## 构图后：QA 评测（与 experiments/02_baselines/step2 同源逻辑）
+## 构图后：QA 评测（与 experiments/01_locomo_benchmark/qa_eval 同源逻辑）
 
 对 **`qa_0.json`** 逐题：**检索 + LLM 作答**（`mosaic/src/query.py`），再用 **`judge_answer_llm`**（与 `llm.py` / `fetch_default_llm_model` 相同 API）判 CORRECT/WRONG，并按 **category** 与**整体**统计。
 
@@ -73,7 +73,7 @@ python run_qa_eval.py
 | **`results/qa_0_eval_summary.json`** | `category_stats`、`overall_accuracy`、`errors` 等汇总 |
 | **`log/qa_eval.log`** | mosaic 详细日志（`MOSAIC_SERVER_LOG_BASENAME=qa_eval.log`） |
 
-等价地也可用 **`experiments/02_baselines/step2_qa_eval.py`**，将 `--graph` / `--tags` 指向上表中的 `artifacts` 路径，`--method llm`，`--out` 指到本目录 `results` 或任意目录。
+等价地也可用 **`experiments/01_locomo_benchmark/qa_eval.py`**，将 `--graph` / `--tags` 指向上表中的 `artifacts` 路径，`--method llm`，`--out` 指到本目录 `results` 或任意目录。
 
 ## 后台构图
 
