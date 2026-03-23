@@ -8,7 +8,7 @@
   - results/qa_0_eval_summary.json 汇总（category_stats、overall_accuracy）
 
 日志：
-  - log/qa_eval.log  （mosaic 库详细日志，与 experiments/02_baselines/step2 行为一致）
+  - log/qa_eval.log  （mosaic 库详细日志，与 experiments/01_locomo_benchmark/qa_eval 行为一致）
 
 用法（需先完成 run.py 构图）:
   conda activate mosaic

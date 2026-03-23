@@ -24,15 +24,15 @@
 
 ## 3. 实验执行顺序（建议）
 
-1. **01_memory_gap**：四域 Memory-only vs DualGraph → Table 1、Figure 1、摘要与 §3.1 数值。
-2. **02_baselines**：同一批 case 跑齐七方法 → Table 2、Figure 2、§3.2。
-3. **04_ncs_mechanism**：Hypertension 上 NCS vs global、缩放与扰动 → Table 4、Figure 4、§3.4。
-4. **05_ablation**：Hypertension 消融 → Table 5、§3.5。
-5. **03_evolving_dag**：涌现实体与演化 DAG → Table 3、Figure 3、§3.3、定性例。
-6. **06_graph_construction**：四域 Auto/Review/Expert 图与下游 → Table 6、Figure 5、Methods 图结构表。
-7. **07_downstream**：四域下游指标与因果分析 → Table 7、§3.7、Appendix Downstream。
-8. **09_locomo**：LoCoMo 各方法各列 → Appendix 表与分析、引用。
-9. **08_pilot**：若执行则填 §3.7 Pilot 与 Appendix；否则保留“拟进行”并注明。
+仓库内 **`experiments/`** 已按 [experiments/README.md](../experiments/README.md) 收敛为三项（对话记忆评测）；表/图编号以该 README 的 **Results Map** 为准。
+
+1. **`01_locomo_benchmark`**：LoCoMo 上 B1–B8 与 MOSAIC；产出 Table 1–3、Figure 2–3、Figure 7 等。
+2. **`02_scalability`**：合成对话 S-100…S-2000 上的可扩展性与效率；产出 Table 4–5、Figure 4–5。
+3. **`03_ablation`**：MOSAIC 组件消融（C0–C6）；产出 Table 6、Figure 6。
+
+统一跑法：`python experiments/run_all.py`（或分项进入各子目录 README）。
+
+> 若稿件中仍保留旧版「四域临床 / 01–09 编号」占位，需将叙述与表格与上述新实验对齐后，再更新 `docs/placeholder-index.md` 对应行。
 
 ---
 

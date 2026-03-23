@@ -10,7 +10,9 @@
 - **[X]、[Y]、[N] 等**：需填入具体数字或范围。
 - **`\placeholder{Domain 3}` / D3 / D4**：需先定域名（如 Insurance / IT support），再全局替换。
 
-填充顺序建议：先定 Domain 3/4 名称与数据 → 跑 01–09 实验 → 按表/图/段落逐项填 → 最后补引言文献与附录。
+填充顺序建议：先定 Domain 3/4 名称与数据 → 按 [experiments/README.md](../experiments/README.md) 跑 **`01_locomo_benchmark` / `02_scalability` / `03_ablation`** → 按表/图/段落逐项填 → 最后补引言文献与附录。
+
+> **说明**：下列「按稿件位置」表仍按**旧稿**小节编号编排；实验目录已改为上述三者，与表中 **01_memory_gap、09_locomo** 等旧名不再一一对应，请以 `experiments/README.md` 的 Results Map 为准同步改稿。
 
 ---
 
@@ -82,19 +84,15 @@
 
 ---
 
-## 按实验目录反查
+## 按实验目录反查（当前仓库）
 
-| 实验 | 需填的 manuscript 位置 |
-|------|------------------------|
-| 01_memory_gap | Abstract 部分数值；§3.1 全段、Table 1、Figure 1、统计框 |
-| 02_baselines | Table 2、Figure 2、§3.2 叙述与统计框 |
-| 03_evolving_dag | Table 3、Figure 3、§3.3 叙述、定性框、Appendix Evolving |
-| 04_ncs_mechanism | Table 4、Figure 4、§3.4 叙述与 Narrative 框、Appendix Compute 部分 |
-| 05_ablation | Table 5、§3.5 叙述、Appendix 全表 |
-| 06_graph_construction | Table 6、Figure 5、§3.6 叙述、Methods 图结构表 |
-| 07_downstream | Table 7、§3.7 因果框、Appendix Downstream |
-| 08_pilot | §3.7 Pilot 整段、Appendix Pilot |
-| 09_locomo | Appendix LoCoMo 表与分析、bibitem |
+| 实验目录 | 主要产出与稿件位置（见 experiments/README Results Map） |
+|----------|--------------------------------------------------------|
+| `01_locomo_benchmark` | LoCoMo 主表、按类准确率、检索 R-Recall/R-Precision、相关图 |
+| `02_scalability` | 长度–准确率、长度–延迟/内存等 |
+| `03_ablation` | MOSAIC 消融表与 Δ 图 |
+
+旧表 **01_memory_gap … 09_locomo** 已移除；若 manuscript 仍引用旧表号，请改与上表及 Results Map 对齐。
 
 ---
 
