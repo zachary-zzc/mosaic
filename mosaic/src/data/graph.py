@@ -3,11 +3,14 @@ from __future__ import annotations
 
 import ast
 import os
+from collections import defaultdict, deque
 from datetime import datetime
 from string import Template
 from typing import Dict, List, Any, Tuple
 
+from src.config_loader import get_query_neighbor_traversal_config
 from src.data.classnode import ClassNode
+from src.data.dual_graph import EDGE_LEG_PRAGMATIC, count_edge_legs, normalize_edge_leg
 from src.prompts_en import *
 from src.prompts_ch import PROMPT_CONFLICT, PROMPT_TAGS, PROMPT_TAGS_QUERY
 from src.assist import (
@@ -271,12 +274,18 @@ class ClassGraph:
         os.makedirs(self._graph_save_dir, exist_ok=True)
         filename = os.path.join(self._graph_save_dir, f"graph_snapshot_{operation}_{timestamp}.json")
 
+        dual_counts = count_edge_legs(self.edges)
         snapshot_data = {
             "timestamp": datetime.now().isoformat(),
             "operation": operation,
             "graph_info": {
                 "total_classes": len(self.graph.nodes),
-                "total_edges": len(self.graph.edges)
+                "total_edges": len(self.graph.edges),
+                "dual_graph_edge_counts": dual_counts,
+                "dual_graph_legend": {
+                    "P": "E_P 过程/共现（edge_leg=EDGE_LEG_PRAGMATIC）",
+                    "A": "E_A 语义/联想（edge_leg=EDGE_LEG_ASSOCIATIVE，预留）",
+                },
             },
             "classes": []
         }
@@ -377,9 +386,10 @@ class ClassGraph:
             if len(matching_instances) >= 2:
                 # 创建edge记录
                 edge_record = {
+                    "edge_leg": EDGE_LEG_PRAGMATIC,
                     "content": message_content,
                     "label": message_label,
-                    "connections": []
+                    "connections": [],
                 }
 
                 # 为每个匹配的实例构建连接信息
@@ -601,6 +611,134 @@ class ClassGraph:
         with open(debug_filename, 'w', encoding='utf-8') as f:
             json.dump(self.warning_items, f, indent=2, ensure_ascii=False)
 
+    def _instance_key(self, class_id: str, instance_id) -> str:
+        return f"{class_id}_{instance_id}"
+
+    def _build_instance_adjacency(self, allowed_legs: frozenset[str]) -> dict[str, set[str]]:
+        """
+        P-2：实例级无向邻接。与 P-1 一致：``self.edges`` 中 ``edge_leg`` 区分 E_P / E_A；
+        ``functions`` 来自构图时共现边，视为 E_P。
+        """
+        adj: dict[str, set[str]] = defaultdict(set)
+
+        def add_undirected(a: str, b: str) -> None:
+            if not a or not b or a == b:
+                return
+            adj[a].add(b)
+            adj[b].add(a)
+
+        if EDGE_LEG_PRAGMATIC in allowed_legs:
+            for class_node in self.graph.nodes:
+                cid = getattr(class_node, "class_id", None) or ""
+                if not cid:
+                    continue
+                for inst in getattr(class_node, "_instances", []) or []:
+                    iid = inst.get("instance_id")
+                    if iid is None:
+                        continue
+                    sk = self._instance_key(cid, iid)
+                    for fn in inst.get("functions") or []:
+                        ocid = fn.get("class_id")
+                        oid = fn.get("instance_id")
+                        if not ocid or oid is None:
+                            continue
+                        add_undirected(sk, self._instance_key(str(ocid), oid))
+
+        for rec in self.edges or []:
+            leg = normalize_edge_leg(rec.get("edge_leg"))
+            if leg not in allowed_legs:
+                continue
+            conns = rec.get("connections") or []
+            keys: list[str] = []
+            for c in conns:
+                ocid = c.get("class_id")
+                oid = c.get("instance_id")
+                if ocid and oid is not None:
+                    keys.append(self._instance_key(str(ocid), oid))
+            for i in range(len(keys)):
+                for j in range(i + 1, len(keys)):
+                    add_undirected(keys[i], keys[j])
+
+        return dict(adj)
+
+    def _neighbor_bfs_keys(
+        self,
+        seeds: set[str],
+        max_hops: int,
+        max_extra: int,
+        allowed_legs: frozenset[str],
+    ) -> list[str]:
+        if max_hops <= 0 or max_extra <= 0 or not seeds:
+            return []
+        adj = self._build_instance_adjacency(allowed_legs)
+        if not adj:
+            return []
+
+        visited: dict[str, int] = {s: 0 for s in seeds}
+        q: deque[tuple[str, int]] = deque((s, 0) for s in seeds)
+        collected: list[str] = []
+
+        while q and len(collected) < max_extra:
+            u, d = q.popleft()
+            if d >= max_hops:
+                continue
+            for v in adj.get(u, ()):
+                if v in visited:
+                    continue
+                nd = d + 1
+                visited[v] = nd
+                q.append((v, nd))
+                if v not in seeds and nd <= max_hops:
+                    collected.append(v)
+                    if len(collected) >= max_extra:
+                        break
+
+        return collected
+
+    def _query_neighbor_context_string(self, seeds: set[str]) -> str:
+        """在种子实例集合上按配置做图邻域扩展，序列化为补充检索片段。"""
+        max_hops, max_extra, legs = get_query_neighbor_traversal_config()
+        if max_hops <= 0 or max_extra <= 0:
+            return ""
+        expanded_keys = self._neighbor_bfs_keys(seeds, max_hops, max_extra, legs)
+        if not expanded_keys:
+            return ""
+
+        key_to_inst: dict[str, dict] = {}
+        for class_node in self.graph.nodes:
+            cid = getattr(class_node, "class_id", None) or ""
+            if not cid:
+                continue
+            for inst in getattr(class_node, "_instances", []) or []:
+                iid = inst.get("instance_id")
+                if iid is None:
+                    continue
+                key_to_inst[self._instance_key(cid, iid)] = inst
+
+        block: list[dict] = []
+        for ek in expanded_keys:
+            inst = key_to_inst.get(ek)
+            if inst is not None:
+                block.append(inst)
+
+        if not block:
+            return ""
+
+        legs_note = ",".join(sorted(legs)) if legs else "P,A"
+        header = (
+            f"\n─── Graph neighbor context (DualGraph traversal, legs={legs_note}, "
+            f"hops≤{max_hops}, max {len(block)} instances) ───\n"
+        )
+        _logger.debug(
+            "P-2 neighbor expansion: seeds=%d expanded=%d (hops=%d max_extra=%d legs=%s)",
+            len(seeds),
+            len(block),
+            max_hops,
+            max_extra,
+            legs_note,
+        )
+        return header + serialize_instance(block)
+
     #用llm的方式去搜索
     def _search_by_sub_llm(self,
                            query,
@@ -613,8 +751,10 @@ class ClassGraph:
         sensed_classes = self._sense_classes_by_llm(query, llm, top_k_class)
         _, instances_in_classes_str = self._fetch_instances_by_tfidf(query, top_k_instances, threshold=0.5,
                                                                      classes=sensed_classes)
+        seeds = set(self.selected_instance_keys)
+        neighbor_str = self._query_neighbor_context_string(seeds)
         combined_instances = "\n\n".join(
-            s for s in (keyword_matched_str, instances_in_classes_str) if (s or "").strip()
+            s for s in (keyword_matched_str, instances_in_classes_str, neighbor_str) if (s or "").strip()
         )
         # 4. 清空已选实例集合，为下一次搜索做准备
         self.selected_instance_keys.clear()
@@ -658,8 +798,10 @@ class ClassGraph:
         count_global, instances_global_str = self._fetch_instances_by_tfidf(
             query, top_k_instances, threshold=0.1)
 
+        seeds = set(self.selected_instance_keys)
+        neighbor_str = self._query_neighbor_context_string(seeds)
         combined_instances = "\n\n".join(
-            s for s in (instances_global_str, instances_in_classes_str) if (s or "").strip()
+            s for s in (instances_global_str, instances_in_classes_str, neighbor_str) if (s or "").strip()
         )
         #combined_instances = kw_coverage_instances + relv_ins + relevant_instances
 

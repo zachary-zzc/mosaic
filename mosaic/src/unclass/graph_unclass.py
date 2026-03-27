@@ -11,6 +11,7 @@ from src.assist import (
 from src.logger import setup_logger
 from src.utils.io_utils import parse_llm_json_object, parse_llm_json_value
 from networkx import Graph
+from src.data.dual_graph import EDGE_LEG_PRAGMATIC
 from src.unclass.prompts_unclass import PROMPT_CREATE_INSTANCE_UNCLASS, PROMPT_UPDATE_INSTANCE
 
 _logger = setup_logger("instance_graph")
@@ -379,9 +380,10 @@ class InstanceGraph:
             if len(matching_instances) >= 2:
                 # 创建edge记录
                 edge_record = {
+                    "edge_leg": EDGE_LEG_PRAGMATIC,
                     "content": message_content,
                     "label": message_label,
-                    "connections": []
+                    "connections": [],
                 }
 
                 # 为每个匹配的实例构建连接信息
