@@ -102,15 +102,16 @@ def main() -> int:
         "",
         "- **没有错**：`run.py` 里对 `python -m mosaic build` 子进程使用的是 `time.perf_counter()`，"
         "表格中「run.py 报告」一行解析自日志里的 `[完成] 图与 tags 已写入 …，耗时 X 秒`，与子进程真实耗时一致。",
-        "- **本仓库后台脚本（`start_background.sh` / `start_background_full.sh`）固定传入 `run.py --hash`**："
-        "构图走 **TF-IDF/hash 启发式**，**不会**像默认 LLM 路径那样对每批消息调用大模型做分类/建类，因此全量 conv0 也可能在较短时间内完成。",
-        "- 若要与论文/实验中的 **「LLM 构图」** 对比耗时，请使用 **不带 `--hash` 的 `run.py`**（或 mosaic `build` 的 LLM 模式）；其墙钟会显著更长。",
+        "- **默认主路径（`docs/optimization.md` B 轨）**：`start_background*.sh` 调用 **`run.py` 不带 `--hash`**，"
+        "构图走 **`[BUILD] mode=hybrid`**（TF-IDF 路由 + LLM 建类/实例），墙钟会明显长于纯 hash 基线。",
+        "- **基线 / 无 API 冒烟**：对 `run.py` 显式加 **`--hash`**（或配置 `hash_only` / `MOSAIC_BUILD_MODE=hash_only`），"
+        "构图不调用大模型，耗时更短，须在论文与日志中标注为 **hash_only**。",
         "",
         "### QA / query 为什么慢？能否优化？",
         "",
-        "- **主要瓶颈在网络 API**：即使检索为 `hash`，每条题仍需要 **(1) LLM 根据检索片段生成答案**、**(2) LLM 评判 CORRECT/WRONG**，"
-        "约 **2 次** chat 调用/题；`method=llm` 时检索阶段还会额外调用 LLM（类感知、关键词补充等），更慢。",
-        "- **脚本里的「单条 query」** 同样是 hash 检索 + **一次**作答 LLM，若网络延迟高，冒烟一步也会显得久。",
+        "- **主要瓶颈在网络 API**：每条题通常需要 **(1) LLM 作答**、**(2) LLM 评判**；"
+        "`method=llm` 时检索阶段还会额外调用 LLM（类感知、关键词补充等），比纯 TF-IDF 检索更慢。",
+        "- **脚本里的「单条 query」** 默认与流水线一致使用 **`method=llm`**（与 hybrid 主路径对齐）；若改为 `hash` 可少一次检索侧 LLM。",
         "- **已做的小优化**：`fetch_default_llm_model()` 在进程内 **复用同一 ChatModel 实例**（避免重复构造包装类；HTTP 连接仍按 endpoint 复用）。",
         "- **若仍要加速（需改实验协议或工程）**：提高并发（多题并行评判，注意配额）、"
         "批处理 API、或在允许时合并/简化评判流程；检索侧对大图可再做 TF-IDF 向量缓存（当前每题会重算相关矩阵，图很大时 CPU 也会占时间）。",
@@ -124,7 +125,7 @@ def main() -> int:
     ]
 
     lines.append(
-        f"| 构图 | run.py → mosaic build（`--hash`）；以下为 run.py 子进程耗时 | {_fmt_sec(graph_runpy_sec)} |"
+        f"| 构图 | run.py → mosaic build（默认 hybrid；基线为 `--hash`）；以下为 run.py 子进程耗时 | {_fmt_sec(graph_runpy_sec)} |"
     )
     if args.wall_graph is not None:
         lines.append(f"| 构图（墙钟） | 自 bash 包裹的整段 run.py | {_fmt_sec(args.wall_graph)} |")
@@ -138,7 +139,7 @@ def main() -> int:
     lines.append("")
     lines.append(
         "说明：构图「run.py 报告」为 mosaic 子进程的 `perf_counter` 耗时；bash 墙钟为整秒且含进程启动。"
-        " 后台流水线构图阶段 **始终带 `--hash`**，见上文「计时说明」。"
+        " 默认流水线 **不带 `run.py --hash`**（hybrid 构图），见上文「计时说明」。"
     )
     lines.append("")
 

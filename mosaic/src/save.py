@@ -166,8 +166,17 @@ def save(data, conv_name):
 
     total = len(result)
     total_msgs, _ = _conversation_message_totals(result)
-    _logger.info("构图开始: 共 %d 个批次，合计 %d 条对话消息", total, total_msgs)
-    _twrite(f"构图开始: {total} 批次，合计 {total_msgs} 条对话消息（每批最多 10 条，与主程序 conv_message_splitter 一致）")
+    eff = os.environ.get("MOSAIC_BUILD_EFFECTIVE", "hybrid")
+    _logger.info(
+        "构图开始: BUILD_EFFECTIVE=%s, 共 %d 个批次，合计 %d 条对话消息",
+        eff,
+        total,
+        total_msgs,
+    )
+    _twrite(
+        f"构图开始: 模式 {eff}，{total} 批次，合计 {total_msgs} 条对话消息"
+        f"（每批最多 10 条，与主程序 conv_message_splitter 一致）"
+    )
 
     done_before = 0
     pbar = _progress_bar(result, total, "构图")
@@ -208,8 +217,14 @@ def save_hash(data, conv_name, graph_save_dir=None, final_graph_path=None, final
         memory._graph_save_dir = graph_save_dir
     total = len(result)
     total_msgs, _ = _conversation_message_totals(result)
-    _logger.info("构图开始(hash): 共 %d 个批次，合计 %d 条对话消息", total, total_msgs)
-    _twrite(f"构图开始(hash): {total} 批次，合计 {total_msgs} 条对话消息")
+    eff = os.environ.get("MOSAIC_BUILD_EFFECTIVE", "hash_only")
+    _logger.info(
+        "构图开始(hash): BUILD_EFFECTIVE=%s, 共 %d 个批次，合计 %d 条对话消息",
+        eff,
+        total,
+        total_msgs,
+    )
+    _twrite(f"构图开始(hash): 模式 {eff}，{total} 批次，合计 {total_msgs} 条对话消息")
 
     done_before = 0
     pbar = _progress_bar(result, total, "构图(hash)")

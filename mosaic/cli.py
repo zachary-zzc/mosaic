@@ -41,13 +41,18 @@ def cmd_build(args: argparse.Namespace) -> int:
     if getattr(args, "graph_save_dir", None):
         os.environ["GRAPH_SAVE_DIR"] = os.path.abspath(args.graph_save_dir)
 
+    from src.config_loader import get_mosaic_build_mode
     from src.save import save, save_hash
 
     with open(args.conv_json, "r", encoding="utf-8") as f:
         data = json.load(f)
     conv_name = args.conv_name or _conv_name_from_path(args.conv_json)
 
-    if args.hash:
+    cfg_mode = get_mosaic_build_mode()
+    hash_only = bool(args.hash) or cfg_mode == "hash_only"
+    os.environ["MOSAIC_BUILD_EFFECTIVE"] = "hash_only" if hash_only else "hybrid"
+
+    if hash_only:
         save_hash(
             data,
             conv_name,
@@ -179,7 +184,11 @@ def _build_parser() -> argparse.ArgumentParser:
     pb.add_argument("--conv-json", required=True, help="对话 JSON 路径")
     pb.add_argument("--conv-name", default=None, help="会话标识（默认从文件名推断）")
     pb.add_argument("--graph-save-dir", default=None, help="图快照目录（默认环境变量 GRAPH_SAVE_DIR 或 results/graph）")
-    pb.add_argument("--hash", action="store_true", help="仅用 TF-IDF/hash 构图，不调用 LLM 建新类")
+    pb.add_argument(
+        "--hash",
+        action="store_true",
+        help="强制 hash_only：仅用 TF-IDF/hash 构图（覆盖 [BUILD] / MOSAIC_BUILD_MODE）",
+    )
     pb.add_argument("--graph-out", default=None, help="将最终图 pickle 到此路径（LLM 构图时可选）")
     pb.add_argument("--tags-out", default=None, help="构图后生成 TF-IDF tags JSON")
     pb.add_argument("--progress-file", default=None, help="写入批次进度（同 MOSAIC_PROGRESS_FILE）")

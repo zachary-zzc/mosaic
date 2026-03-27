@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # 在已有构图产物（artifacts/graph_network_conv0.pkl、conv0_tags.json）上后台执行：
-#   1) 单条 query 冒烟（mosaic query, method=hash）
+#   1) 单条 query 冒烟（mosaic query, method=llm，与主路径一致）
 #   2) 全量 QA 评测（run_qa_eval.py，使用 paths.json 中的 qa_0.json）
 # 适用：已单独跑完 run.py / start_background_full.sh 仅构图阶段，或图已就绪需重跑评测。
 # 日志：log/query_eval_task_stdout.log；mosaic → log/mosaic_server.log；评测详情 → log/qa_eval.log
@@ -27,15 +27,15 @@ nohup bash -lc "
   cd \"$RUN_DIR\"
   export PYTHONPATH=\"$REPO\"
 
-  echo \"========== [1/2] 单条查询冒烟（mosaic query, method=hash）==========\"
+  echo \"========== [1/2] 单条查询冒烟（mosaic query, method=llm）==========\"
   python -m mosaic query \\
     --graph-pkl \"$RUN_DIR/artifacts/graph_network_conv0.pkl\" \\
     --tags-json \"$RUN_DIR/artifacts/conv0_tags.json\" \\
-    --method hash \\
+    --method llm \\
     --question \"What is Caroline's identity?\"
 
   echo \"========== [2/2] QA 评测（qa_0.json）==========\"
-  python run_qa_eval.py --paths \"$PATHS_FULL\" --method hash
+  python run_qa_eval.py --paths \"$PATHS_FULL\" --method llm
 
   echo \"========== query + 评测完成 ==========\"
   echo \"评测结果: $RUN_DIR/results/\"
