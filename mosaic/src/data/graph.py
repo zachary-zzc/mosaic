@@ -323,6 +323,20 @@ class ClassGraph:
             json.dump(self.edges, f, indent=2, ensure_ascii=False)
         _logger.debug(f"图边已保存: {filename}")
 
+        # 4. A-2：手稿级 EntityGraph JSON（与 graph_snapshot / graph_edge 同目录、同日戳）
+        try:
+            from src.graph.dual.entity_graph_store import entity_graph_from_class_graph
+
+            eg_path = os.path.join(self._graph_save_dir, f"entity_graph_{operation}_{timestamp}.json")
+            eg_store = entity_graph_from_class_graph(self)
+            eg_store.write_json(eg_path)
+            _logger.debug("EntityGraph 已保存: %s", eg_path)
+            dag_ok, dag_detail = eg_store.validate_dag()
+            if not dag_ok:
+                _logger.warning("EntityGraph G_P 校验非 DAG: %s", dag_detail)
+        except Exception as exc:
+            _logger.warning("EntityGraph 导出失败（不影响类图快照）: %s", exc)
+
     def _save_complete_graph(self, operation: str, timestamp: str) -> None:
         """
         保存完整的图结构为多种格式

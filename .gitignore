@@ -37,6 +37,8 @@ env/
 
 # === Misc ===
 *.json
+# EntityGraph 等 JSON Schema 契约需入库（见 docs/optimization.md A-1）
+!mosaic/schemas/*.json
 
 # === Mosaic: config & secrets ===
 config/*.cfg
