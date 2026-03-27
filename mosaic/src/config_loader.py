@@ -68,6 +68,104 @@ def resolve_under_mosaic(path_value: str) -> Path:
     return (_mosaic_root() / p).resolve()
 
 
+_DEFAULT_CHAT_PROVIDER = "ali_api"
+_DEFAULT_CHAT_MODEL = "qwen3.5-plus"
+
+
+def get_mosaic_chat_model_spec() -> str:
+    """
+    Mosaic 内所有 LLM 调用（构图 / query / judge）共用的「完全限定名」，供 load_chat_model 使用。
+
+    格式：``provider|model``；自定义 HTTP 服务端为 ``custom|model_name|url``（与 load_chat_model 一致）。
+
+    优先级：
+    - 环境变量 ``MOSAIC_CHAT_MODEL_SPEC``（整条覆盖）
+    - ``MOSAIC_CHAT_PROVIDER`` + ``MOSAIC_CHAT_MODEL``（分别覆盖）
+    - ``[LLM]`` 段 ``provider``、``chat_model``（缺省为 ali_api + qwen3.5-plus，见 docs/optimization.md P-0）
+    """
+    env_full = os.environ.get("MOSAIC_CHAT_MODEL_SPEC", "").strip()
+    if env_full:
+        return env_full
+
+    config = load_api_config()
+    provider = _DEFAULT_CHAT_PROVIDER
+    model = _DEFAULT_CHAT_MODEL
+    if config.has_section("LLM"):
+        provider = config.get("LLM", "provider", fallback=_DEFAULT_CHAT_PROVIDER).strip() or _DEFAULT_CHAT_PROVIDER
+        model = config.get("LLM", "chat_model", fallback=_DEFAULT_CHAT_MODEL).strip() or _DEFAULT_CHAT_MODEL
+
+    env_provider = os.environ.get("MOSAIC_CHAT_PROVIDER", "").strip()
+    if env_provider:
+        provider = env_provider
+    env_model = os.environ.get("MOSAIC_CHAT_MODEL", "").strip()
+    if env_model:
+        model = env_model
+
+    return f"{provider}|{model}"
+
+
+def get_mosaic_chat_model_name() -> str:
+    """当前配置下的对话模型标识（如 qwen3.5-plus），不含 provider。供需直接构造 QwenChatModel 的脚本使用。"""
+    spec = get_mosaic_chat_model_spec()
+    if "|" not in spec:
+        return spec
+    tokens = spec.split("|")
+    if len(tokens) >= 2:
+        return tokens[1]
+    return spec
+
+
+def get_query_neighbor_traversal_config() -> tuple[int, int, frozenset[str]]:
+    """
+    P-2：查询阶段在嵌入/TF-IDF/关键词种子之外，沿双图实例邻接做有限跳扩展。
+
+    返回 (max_hops, max_extra_instances, allowed_edge_legs)。
+    max_hops == 0 表示关闭（与 docs/optimization.md 中「可关」一致）。
+
+    配置节 ``[QUERY]``：
+    - neighbor_hops：最大跳数，默认 1
+    - neighbor_max_extra：最多追加的邻域实例数，默认 16
+    - neighbor_edge_legs：``ALL``、``P``、``A`` 或逗号分隔 ``P,A``（与 dual_graph 中 E_P/E_A 一致）
+
+    环境变量（可选）：MOSAIC_QUERY_NEIGHBOR_HOPS、MOSAIC_QUERY_NEIGHBOR_MAX_EXTRA、MOSAIC_QUERY_NEIGHBOR_EDGE_LEGS
+    """
+    from src.data.dual_graph import ALL_EDGE_LEGS, EDGE_LEG_ASSOCIATIVE, EDGE_LEG_PRAGMATIC
+
+    config = load_api_config()
+    hops = 1
+    max_extra = 16
+    legs_raw = "ALL"
+    if config.has_section("QUERY"):
+        hops = config.getint("QUERY", "neighbor_hops", fallback=1)
+        max_extra = config.getint("QUERY", "neighbor_max_extra", fallback=16)
+        legs_raw = config.get("QUERY", "neighbor_edge_legs", fallback="ALL").strip() or "ALL"
+
+    eh = os.environ.get("MOSAIC_QUERY_NEIGHBOR_HOPS", "").strip()
+    if eh.isdigit():
+        hops = int(eh)
+    em = os.environ.get("MOSAIC_QUERY_NEIGHBOR_MAX_EXTRA", "").strip()
+    if em.isdigit():
+        max_extra = int(em)
+    el = os.environ.get("MOSAIC_QUERY_NEIGHBOR_EDGE_LEGS", "").strip()
+    if el:
+        legs_raw = el
+
+    u = legs_raw.upper().replace(" ", "")
+    if u in ("ALL", "*", "BOTH"):
+        legs: frozenset[str] = frozenset(ALL_EDGE_LEGS)
+    else:
+        parts = [p.strip().upper() for p in legs_raw.split(",") if p.strip()]
+        chosen: set[str] = set()
+        for p in parts:
+            if p in ("P", "PRAGMATIC", "E_P"):
+                chosen.add(EDGE_LEG_PRAGMATIC)
+            elif p in ("A", "ASSOCIATIVE", "E_A"):
+                chosen.add(EDGE_LEG_ASSOCIATIVE)
+        legs = frozenset(chosen if chosen else ALL_EDGE_LEGS)
+
+    return hops, max_extra, legs
+
+
 def get_embedding_model_path() -> str:
     """
     返回 SentenceTransformer 可用的本地模型目录绝对路径字符串。
