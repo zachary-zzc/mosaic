@@ -1,0 +1,113 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mosaic.local/schemas/entity_graph.schema.json",
+  "title": "Mosaic EntityGraph",
+  "description": "与 docs/optimization.md §3.1 对齐的手稿级 V / E_P / E_A 导出；与 ClassGraph 快照并行过渡期字段见 legacy_graph_info。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "version",
+    "build_mode",
+    "conversation_id",
+    "entities",
+    "edges_p",
+    "edges_a",
+    "communities",
+    "dag_valid"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "本 JSON 结构版本；与代码中 ENTITY_GRAPH_SCHEMA_VERSION 一致"
+    },
+    "version": {
+      "type": "string",
+      "description": "构建语义版本或标签（如 1）"
+    },
+    "build_mode": {
+      "type": "string",
+      "enum": ["hybrid", "hash_only"],
+      "description": "与 MOSAIC_BUILD_EFFECTIVE / [BUILD] mode 一致"
+    },
+    "conversation_id": {
+      "type": "string",
+      "description": "会话标识（如 conv0、与 graph_snapshot operation 字段一致）"
+    },
+    "entities": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": ["entity_id", "canonical_name", "description", "belief", "metadata"],
+        "properties": {
+          "entity_id": { "type": "string" },
+          "canonical_name": { "type": "string" },
+          "description": { "type": "string" },
+          "belief": {
+            "type": "object",
+            "description": "离散状态 + 可选熵缓存；当前为占位对象"
+          },
+          "metadata": {
+            "type": "object",
+            "description": "来源 class_id、message_labels 等"
+          }
+        }
+      }
+    },
+    "edges_p": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": ["source", "target", "leg"],
+        "properties": {
+          "source": { "type": "string", "description": "entity_id" },
+          "target": { "type": "string", "description": "entity_id" },
+          "leg": { "type": "string", "const": "P" },
+          "confidence": { "type": ["number", "null"] },
+          "provenance": { "type": ["object", "null"] }
+        }
+      }
+    },
+    "edges_a": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": ["u", "v", "leg", "weight"],
+        "properties": {
+          "u": { "type": "string" },
+          "v": { "type": "string" },
+          "leg": { "type": "string", "const": "A" },
+          "weight": { "type": "number" },
+          "provenance": { "type": ["object", "null"] }
+        }
+      }
+    },
+    "communities": {
+      "type": "object",
+      "additionalProperties": { "type": "string" },
+      "description": "entity_id -> comm_id；尚无 Leiden 时为空对象"
+    },
+    "exported_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "UTC ISO8601 导出时间"
+    },
+    "dag_valid": {
+      "type": "boolean",
+      "description": "由 G_P 星形定向导出时通常为 true；若存在环则为 false"
+    },
+    "dag_violation_detail": {
+      "type": ["string", "null"],
+      "description": "当 dag_valid 为 false 时的诊断信息"
+    },
+    "legacy_graph_info": {
+      "type": ["object", "null"],
+      "additionalProperties": true,
+      "description": "与 graph_snapshot 对齐的摘要统计，便于对照旧产物"
+    }
+  }
+}
