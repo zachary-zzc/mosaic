@@ -72,6 +72,28 @@ _DEFAULT_CHAT_PROVIDER = "ali_api"
 _DEFAULT_CHAT_MODEL = "qwen3.5-plus"
 
 
+def get_mosaic_build_mode() -> str:
+    """
+    构图模式（docs/optimization.md §5 B-1）：
+
+    - ``hybrid``：``sense_classes`` 对新建类使用 LLM；实例更新非纯 hash（``save`` 主路径）。
+    - ``hash_only``：与 ``save_hash`` 一致，不作构图 LLM 调用（基线）。
+
+    优先级：环境变量 ``MOSAIC_BUILD_MODE``（``hybrid`` / ``hash_only``）→ ``[BUILD] mode`` → 默认 ``hybrid``。
+
+    注意：CLI ``build --hash`` 在 ``cli.py`` 中强制 ``hash_only``，不经过本函数返回值单独判断。
+    """
+    env = os.environ.get("MOSAIC_BUILD_MODE", "").strip().lower()
+    if env in ("hybrid", "hash_only"):
+        return env
+    config = load_api_config()
+    if config.has_section("BUILD"):
+        m = config.get("BUILD", "mode", fallback="hybrid").strip().lower()
+        if m in ("hybrid", "hash_only"):
+            return m
+    return "hybrid"
+
+
 def get_mosaic_chat_model_spec() -> str:
     """
     Mosaic 内所有 LLM 调用（构图 / query / judge）共用的「完全限定名」，供 load_chat_model 使用。

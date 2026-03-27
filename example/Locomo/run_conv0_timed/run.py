@@ -11,7 +11,7 @@ stdout：任务控制信息 + 子进程继承的 tqdm/输出。
   conda activate mosaic
   python run.py
   python run.py --verbose-log
-  python run.py --hash
+  python run.py --hash   # 强制 hash_only 基线（覆盖 [BUILD]）
   python run.py --paths /path/to/paths.json
 
 后台:
@@ -87,7 +87,7 @@ def main() -> None:
     parser.add_argument(
         "--hash",
         action="store_true",
-        help="仅 TF-IDF/hash 构图（mosaic build --hash），不调用 LLM 建新类",
+        help="强制 hash_only：等价于 mosaic build --hash（覆盖配置 [BUILD] / MOSAIC_BUILD_MODE）",
     )
     args = parser.parse_args()
 
@@ -135,6 +135,21 @@ def main() -> None:
     mosaic_root = paths["mosaic_root"]
     assert isinstance(mosaic_root, Path)
     conv_name = _conv_name_from_json(conv_json)
+
+    mr = str(mosaic_root)
+    if mr not in sys.path:
+        sys.path.insert(0, mr)
+    from src.config_loader import get_mosaic_build_mode
+
+    cfg_build = get_mosaic_build_mode()
+    if args.hash:
+        _print_control(
+            f"[配置] 构图模式: hash_only（CLI --hash 强制；当前配置文件为 {cfg_build}）"
+        )
+    else:
+        _print_control(
+            f"[配置] 构图模式: {cfg_build}（[BUILD] / MOSAIC_BUILD_MODE；基线请加 --hash）"
+        )
 
     _print_control("[任务] Locomo conv0 构图（mosaic: python -m mosaic build）")
     _print_control(f"[配置] mosaic 根目录: {mosaic_root}")
