@@ -12,19 +12,22 @@ from string import Template
 
 from src.llm.llm import load_chat_model
 from src.logger import setup_logger
-from src.config_loader import get_embedding_model_path
+from src.config_loader import get_embedding_model_path, get_mosaic_chat_model_spec
 from src.utils.constants import DEFAULT_TFIDF_VECTORIZER_PARAMS
 from src.utils import io_utils as _io
 from src.utils.io_utils import parse_llm_json_object
 
 _logger = setup_logger("graph assist")
 
+# 评测/查询循环内会高频调用；复用同一 ChatModel 实例（底层 HTTP 客户端已在 llm 模块按 key 缓存）
+_default_llm_model = None
 
 
-#用这样的方式去加载调用的api
 def fetch_default_llm_model():
-    return load_chat_model("ali_api|qwen3.5-plus")
-    #return load_chat_model("ali_api|deepseek-r1")
+    global _default_llm_model
+    if _default_llm_model is None:
+        _default_llm_model = load_chat_model(get_mosaic_chat_model_spec())
+    return _default_llm_model
 
 def build_class_fragments(class_node):
     """

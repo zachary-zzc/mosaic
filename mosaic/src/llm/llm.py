@@ -9,7 +9,7 @@ from langchain_core.outputs import ChatGeneration, ChatResult
 from langchain_core.callbacks.manager import CallbackManagerForLLMRun
 from openai import OpenAI, APIError, APIConnectionError, APITimeoutError
 
-from src.config_loader import get_api_key_and_base_url
+from src.config_loader import get_api_key_and_base_url, get_mosaic_chat_model_spec
 from src.logger import setup_logger
 
 _logger = setup_logger("llm")
@@ -108,7 +108,7 @@ class CustomChatModel(BaseChatModel):
 class QwenChatModel(BaseChatModel):
     """Qwen Chat Model that interfaces with the Qwen API."""
 
-    model_name: str = "qwen3.5-plus"  # Default model name（与 fetch_default_llm_model 一致）
+    model_name: str = "qwen3.5-plus"  # 与 config [LLM] chat_model 默认一致；生产路径由 load_chat_model 传入
     api_key: str = ""
     base_url: str = ""
     temperature: float = 0.0
@@ -234,8 +234,7 @@ def load_chat_model(fully_specified_name: str) -> BaseChatModel:
 
 
 if __name__ == "__main__":
-    llm = load_chat_model("ali_api|qwen3.5-plus")
-    #llm = load_chat_model("ali_api|deepseek-r1")
+    llm = load_chat_model(get_mosaic_chat_model_spec())
     prompt = "你是谁"
     response = llm.invoke(prompt)
     print(response.content)

@@ -19,7 +19,7 @@ _ROOT = Path(__file__).resolve().parent.parent
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
-from src.config_loader import get_api_key_and_base_url  # noqa: E402
+from src.config_loader import get_api_key_and_base_url, get_mosaic_chat_model_name  # noqa: E402
 from src.llm.llm import QwenChatModel  # noqa: E402
 
 _JSON_OBJECT = {"type": "json_object"}
@@ -31,7 +31,9 @@ def main() -> int:
         print("错误: 未配置 API Key 或 base_url（config.cfg 或 DASHSCOPE_* 环境变量）", file=sys.stderr)
         return 2
 
-    llm = QwenChatModel(api_key=key, base_url=base, model_name="qwen3.5-plus", temperature=0.0)
+    llm = QwenChatModel(
+        api_key=key, base_url=base, model_name=get_mosaic_chat_model_name(), temperature=0.0
+    )
     # 百炼要求 messages 中含 json 字样；输出须为单个 JSON 对象
     prompt = """请用 JSON 返回一个对象，包含两个键：
 - "hello": 字符串 "ok"
