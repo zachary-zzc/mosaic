@@ -722,6 +722,49 @@ class ClassGraph:
     def _instance_key(self, class_id: str, instance_id) -> str:
         return f"{class_id}_{instance_id}"
 
+    @staticmethod
+    def _instance_key_to_entity_id(instance_key: str) -> str:
+        """``class_1_instance_1`` → ``class_1:instance_1``（与 EntityGraph entity_id 对齐）。"""
+        sep = "_instance_"
+        if sep in instance_key:
+            cid, tail = instance_key.split(sep, 1)
+            return f"{cid}:instance_{tail}"
+        return instance_key
+
+    def _instance_keys_to_entity_ids(self, keys: set[str] | list[str]) -> list[str]:
+        out = [self._instance_key_to_entity_id(k) for k in keys]
+        return sorted(set(out))
+
+    def graph_stats_for_qa(self) -> dict[str, Any]:
+        """E-1 / optimization §7：当前图统计，供每条 QA 记录附着。"""
+        n_inst = sum(len(getattr(n, "_instances", []) or []) for n in self.graph.nodes)
+        n_class = len(self.graph.nodes)
+        up = unique_directed_star_pairs_p(self.edges or [])
+        ua = unique_undirected_star_pairs_a(self.edges or [])
+        np_e, na_e = len(up), len(ua)
+        density_a = (2.0 * na_e / (n_inst * (n_inst - 1))) if n_inst > 1 else 0.0
+        gp_dag = True
+        if self.G_p.number_of_nodes() > 0:
+            gp_dag = nx.is_directed_acyclic_graph(self.G_p)
+        return {
+            "schema_version": 1,
+            "|V|_instances": n_inst,
+            "|V|_classes": n_class,
+            "|E_P|_unique": np_e,
+            "|E_A|_unique": na_e,
+            "edge_records_count": len(self.edges or []),
+            "density_G_a": round(density_a, 8),
+            "G_p_is_dag": gp_dag,
+            "G_p_edges": self.G_p.number_of_edges(),
+            "G_a_edges": self.G_a.number_of_edges(),
+        }
+
+    def _neighbor_expansion_key_list(self, seeds: set[str]) -> list[str]:
+        max_hops, max_extra, legs = get_query_neighbor_traversal_config()
+        if max_hops <= 0 or max_extra <= 0 or not seeds:
+            return []
+        return self._neighbor_bfs_keys(seeds, max_hops, max_extra, legs)
+
     def _build_instance_adjacency(self, allowed_legs: frozenset[str]) -> dict[str, set[str]]:
         """
         P-2：实例级无向邻接。与 P-1 一致：``self.edges`` 中 ``edge_leg`` 区分 E_P / E_A；
@@ -857,17 +900,35 @@ class ClassGraph:
         self.selected_instance_keys.clear()
         keyword_matched_str = self.find_keyword_relevant_instance_tags(query)
         sensed_classes = self._sense_classes_by_llm(query, llm, top_k_class)
+        class_ids = [
+            str(c.get("class_id"))
+            for c in sensed_classes.get("selected_classes", [])
+            if c.get("class_id")
+        ]
         _, instances_in_classes_str = self._fetch_instances_by_tfidf(query, top_k_instances, threshold=0.5,
                                                                      classes=sensed_classes)
         seeds = set(self.selected_instance_keys)
+        expanded_keys = self._neighbor_expansion_key_list(seeds)
         neighbor_str = self._query_neighbor_context_string(seeds)
         combined_instances = "\n\n".join(
             s for s in (keyword_matched_str, instances_in_classes_str, neighbor_str) if (s or "").strip()
         )
-        # 4. 清空已选实例集合，为下一次搜索做准备
         self.selected_instance_keys.clear()
-
-        return combined_instances
+        trace: dict[str, Any] = {
+            "schema_version": 1,
+            "retrieval_method": "llm",
+            "llm_selected_class_ids": class_ids,
+            "tfidf_hits": {
+                "count": len(seeds),
+                "entity_ids": self._instance_keys_to_entity_ids(seeds),
+            },
+            "neighbor_expansion": {
+                "count": len(expanded_keys),
+                "entity_ids": [self._instance_key_to_entity_id(k) for k in expanded_keys],
+            },
+            "prompt_chars": len(combined_instances),
+        }
+        return combined_instances, trace
 
     #用hash的方式去搜索
     def _search_by_sub_hash(self,
@@ -875,30 +936,14 @@ class ClassGraph:
                             top_k_class=10,
                             top_k_instances=15,
                             ):
-        # 重置已选实例集合
         self.selected_instance_keys.clear()
 
-        # # 1. 关键词覆盖查询，在第一步和第二步剩下的实例中进行
-        # # 提取关键词
-        # model = embedding_model
-        # kw_model = KeyBERT(model=model)
-        # keywords = kw_model.extract_keywords(
-        #     query,
-        #     keyphrase_ngram_range=(1, 2),  # 关键词长度范围，表示提取从单个单词到两个单词的关键词
-        #     stop_words='english',
-        #     top_n=3  # 返回前10个关键词
-        # )
-        # print(keywords)
-        # query_keywords = keywords_process(keywords)
-        # print(query_keywords)
-        # kw_coverage_instances = self.find_kw_coverage_instances_with_tfidf(
-        #     query_keywords,
-        #     similarity_threshold=0.15,
-        #     single_top_k=7,
-        #     combo_top_k=7
-        # )
-
         sensed_classes = self._sense_classes_by_tfidf(query, top_k_class, threshold=0.6, allow_below_threshold=True)
+        tfidf_class_ids = [
+            str(c.get("class_id"))
+            for c in sensed_classes.get("selected_classes", [])
+            if c.get("class_id")
+        ]
         count_in_classes, instances_in_classes_str = self._fetch_instances_by_tfidf(
             query, top_k_instances, threshold=0.5, classes=sensed_classes)
         _logger.debug(f"第一阶段选择实例数量: {count_in_classes}")
@@ -907,16 +952,27 @@ class ClassGraph:
             query, top_k_instances, threshold=0.1)
 
         seeds = set(self.selected_instance_keys)
+        expanded_keys = self._neighbor_expansion_key_list(seeds)
         neighbor_str = self._query_neighbor_context_string(seeds)
         combined_instances = "\n\n".join(
             s for s in (instances_global_str, instances_in_classes_str, neighbor_str) if (s or "").strip()
         )
-        #combined_instances = kw_coverage_instances + relv_ins + relevant_instances
-
-        # 5. 清空已选实例集合，为下一次搜索做准备
         self.selected_instance_keys.clear()
-
-        return combined_instances
+        trace: dict[str, Any] = {
+            "schema_version": 1,
+            "retrieval_method": "hash",
+            "tfidf_class_ids_stage1": tfidf_class_ids,
+            "tfidf_hits": {
+                "count": len(seeds),
+                "entity_ids": self._instance_keys_to_entity_ids(seeds),
+            },
+            "neighbor_expansion": {
+                "count": len(expanded_keys),
+                "entity_ids": [self._instance_key_to_entity_id(k) for k in expanded_keys],
+            },
+            "prompt_chars": len(combined_instances),
+        }
+        return combined_instances, trace
 
     def _sense_classes_by_llm(self, query, llm, top_k_class):
         """
