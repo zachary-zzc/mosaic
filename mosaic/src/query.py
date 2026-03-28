@@ -19,12 +19,12 @@ _logger = setup_logger("graph query")
 def _query_by_llm(query: str, memory: ClassGraph, llm=None):
     if llm is None:
         llm = fetch_default_llm_model()
-    ret = memory._search_by_sub_llm(query, llm)
+    ret, _trace = memory._search_by_sub_llm(query, llm)
     return query_question(llm, query, ret, PROMPT_QUERY_TEMPLATE)
 
 
 def _query_by_heuristic(query: str, memory: ClassGraph) -> str:
-    ret = memory._search_by_sub_hash(query)
+    ret, _trace = memory._search_by_sub_hash(query)
     llm = fetch_default_llm_model()
     return query_question(llm, query, ret, PROMPT_QUERY_TEMPLATE)
 
@@ -35,6 +35,25 @@ def query(query: str, memory: ClassGraph, method: str = "llm") -> str:
     if method == "hash":
         return _query_by_heuristic(query, memory)
     raise ValueError(f"Unknown method: {method}")
+
+
+def query_with_telemetry(question: str, memory: ClassGraph, method: str = "llm") -> dict:
+    """
+    检索 + 作答，并返回 E-1 字段：retrieved_context、graph_stats（docs/optimization.md §7 D-3）。
+    """
+    llm = fetch_default_llm_model()
+    if method == "llm":
+        ctx, rctx = memory._search_by_sub_llm(question, llm)
+    elif method == "hash":
+        ctx, rctx = memory._search_by_sub_hash(question)
+    else:
+        raise ValueError(f"Unknown method: {method}")
+    ans = query_question(llm, question, ctx, PROMPT_QUERY_TEMPLATE)
+    return {
+        "answer": ans,
+        "retrieved_context": rctx,
+        "graph_stats": memory.graph_stats_for_qa(),
+    }
 
 
 def _print_qa_summary(qa_results, category_stats, error_records, qa_file_name):
@@ -84,7 +103,7 @@ def process_single_qa(
     memory.graph = load_graphs(graph_file_path)
     memory.process_kw(tag_file_path)
 
-    query_fn = lambda q, mem: query(q, mem, method)
+    query_fn = lambda q, mem: query_with_telemetry(q, mem, method)
     qa_results, category_stats, error_records = run_qa_loop(
         questions,
         memory,
@@ -107,6 +126,7 @@ def process_single_qa(
         "errors": error_records,
     }
     result_data = {
+        "qa_eval_schema_version": 1,
         "qa_file": os.path.basename(qa_file_path),
         "graph_file": os.path.basename(graph_file_path),
         "tag_file": os.path.basename(tag_file_path),

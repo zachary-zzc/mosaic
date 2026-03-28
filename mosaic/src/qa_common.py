@@ -70,7 +70,7 @@ def judge_answer_llm(question: str, gold_answer: str, generated_answer: str) -> 
 def run_qa_loop(
     questions: List[Dict[str, Any]],
     memory: Any,
-    query_fn: Callable[[str, Any], str],
+    query_fn: Callable[[str, Any], Any],
     *,
     skip_category: int = 5,
     max_questions: int | None = None,
@@ -78,6 +78,8 @@ def run_qa_loop(
 ) -> tuple[List[Dict], Dict, List[Dict]]:
     """
     Run QA over a list of questions. Returns (qa_results, category_stats, error_records).
+
+    ``query_fn`` 可返回 ``str``，或含 ``answer`` 键的 ``dict``（可带 ``retrieved_context``、``graph_stats``，E-1）。
     """
     if max_questions is not None:
         questions = questions[:max_questions]
@@ -103,11 +105,23 @@ def run_qa_loop(
             if not isinstance(expected, str):
                 expected = str(expected).strip()
 
-            answer = query_fn(question, memory)
+            raw_out = query_fn(question, memory)
+            if isinstance(raw_out, dict) and "answer" in raw_out:
+                answer = raw_out["answer"]
+                rctx = raw_out.get("retrieved_context")
+                gstats = raw_out.get("graph_stats")
+            else:
+                answer = raw_out
+                rctx = None
+                gstats = None
             _logger.debug("expected_answer: %s; answer: %s", expected, answer)
 
             label = judge_answer_llm(question, expected, answer)
             qa_item = {**qa_item, "generated_answer": answer, "judgment": label}
+            if rctx is not None:
+                qa_item["retrieved_context"] = rctx
+            if gstats is not None:
+                qa_item["graph_stats"] = gstats
             qa_results.append(qa_item)
 
             total_count += 1
