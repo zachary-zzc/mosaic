@@ -10,7 +10,12 @@ from typing import Dict, List, Any, Tuple
 
 from src.config_loader import get_query_neighbor_traversal_config
 from src.data.classnode import ClassNode
-from src.data.dual_graph import EDGE_LEG_PRAGMATIC, count_edge_legs, normalize_edge_leg
+from src.data.dual_graph import (
+    EDGE_LEG_ASSOCIATIVE,
+    EDGE_LEG_PRAGMATIC,
+    count_edge_legs,
+    normalize_edge_leg,
+)
 from src.prompts_en import *
 from src.prompts_ch import PROMPT_CONFLICT, PROMPT_TAGS, PROMPT_TAGS_QUERY
 from src.assist import (
@@ -27,11 +32,16 @@ from src.assist import (
 )
 from src.utils.constants import DEFAULT_TFIDF_VECTORIZER_PARAMS, TFIDF_KEYWORD_MAX_DF
 from src.utils.io_utils import parse_llm_json_object, parse_llm_json_value
-from networkx import Graph
+import networkx as nx
 import json
 import pickle
 from keybert import KeyBERT
 from src.logger import setup_logger
+from src.graph.dual.hyperedge import (
+    star_oriented_pairs_from_connections,
+    unique_directed_star_pairs_p,
+    unique_undirected_star_pairs_a,
+)
 
 _logger = setup_logger("graph cudr")
 
@@ -41,7 +51,10 @@ class ClassGraph:
                  instance_sense_threshold: float = 0.7,
                  llm=fetch_default_llm_model()):
         self._llm = llm
-        self.graph: Graph = Graph()
+        self.graph: nx.Graph = nx.Graph()
+        # A-3：与 self.edges（及 EntityGraph 星形展开）同步的 networkx 双图
+        self.G_p: nx.DiGraph = nx.DiGraph()
+        self.G_a: nx.Graph = nx.Graph()
         self._instance_sense_threshold = 0.7
         self._built_in = ["unclassified", "attributes", "operations"]
         self.name = ""
@@ -72,6 +85,56 @@ class ClassGraph:
 
     def list_classes(self) -> List[ClassNode]:
         return list(self.graph.nodes)
+
+    def _apply_edge_record_to_dual_nx(self, rec: dict) -> None:
+        """A-3：每条 ``self.edges`` 记录同时写入 G_p（E_P 有向）或 G_a（E_A 无向加权）。"""
+        leg = normalize_edge_leg(rec.get("edge_leg"))
+        pairs = star_oriented_pairs_from_connections(rec.get("connections") or [])
+        if not pairs:
+            return
+        prov = {
+            "message_label": rec.get("label"),
+            "content_preview": (str(rec.get("content") or ""))[:200],
+        }
+        if leg == EDGE_LEG_PRAGMATIC:
+            for u, v in pairs:
+                self.G_p.add_edge(u, v, **prov)
+        elif leg == EDGE_LEG_ASSOCIATIVE:
+            w = float(rec.get("weight", 1.0))
+            for u, v in pairs:
+                a, b = (u, v) if u <= v else (v, u)
+                if self.G_a.has_edge(a, b):
+                    self.G_a[a][b]["weight"] = max(
+                        float(self.G_a[a][b].get("weight", w)), w
+                    )
+                else:
+                    self.G_a.add_edge(a, b, weight=w, **prov)
+
+    def _rebuild_dual_nx_from_edges(self) -> None:
+        """从 ``self.edges`` 全量重建 G_p/G_a（用于校验失败后的自愈）。"""
+        self.G_p.clear()
+        self.G_a.clear()
+        for rec in self.edges or []:
+            self._apply_edge_record_to_dual_nx(rec)
+
+    def _dual_nx_matches_edge_records(self) -> tuple[bool, str | None]:
+        """唯一星形展开边集应与当前 nx 图一致（去重后与 DiGraph/Graph 边数对齐）。"""
+        exp_p = unique_directed_star_pairs_p(self.edges or [])
+        got_p = set(self.G_p.edges())
+        if exp_p != got_p:
+            return (
+                False,
+                f"G_p 边集不一致: |期望|={len(exp_p)} |nx|={len(got_p)} "
+                f"仅nx={got_p - exp_p} 仅期望={exp_p - got_p}",
+            )
+        exp_a = unique_undirected_star_pairs_a(self.edges or [])
+        got_a = {(u, v) if u <= v else (v, u) for u, v in self.G_a.edges()}
+        if exp_a != got_a:
+            return (
+                False,
+                f"G_a 边集不一致: |期望|={len(exp_a)} |nx|={len(got_a)}",
+            )
+        return True, None
 
     ###感知信息和现有类，看哪些类需要更新，哪些类需要新增。对于需要更新的类，保留更新的类id和对应这个类的信息片段和背景片段；对于需要新增的类，保留这个新增类的类名和新增类的信息片段和背景片段
     def sense_classes(self,
@@ -275,6 +338,22 @@ class ClassGraph:
         filename = os.path.join(self._graph_save_dir, f"graph_snapshot_{operation}_{timestamp}.json")
 
         dual_counts = count_edge_legs(self.edges)
+        ok_nx, nx_warn = self._dual_nx_matches_edge_records()
+        if not ok_nx:
+            _logger.warning("G_p/G_a 与 self.edges 不同步，执行重建: %s", nx_warn)
+            self._rebuild_dual_nx_from_edges()
+            ok_nx, nx_warn = self._dual_nx_matches_edge_records()
+            if not ok_nx:
+                _logger.warning("重建后 G_p/G_a 仍异常: %s", nx_warn)
+
+        gp_dag = True
+        if self.G_p.number_of_nodes() > 0:
+            gp_dag = nx.is_directed_acyclic_graph(self.G_p)
+        if not gp_dag:
+            _logger.warning("G_p 非 DAG（星形定向下通常不应出现），请检查边数据")
+
+        unique_p = unique_directed_star_pairs_p(self.edges or [])
+        unique_a = unique_undirected_star_pairs_a(self.edges or [])
         snapshot_data = {
             "timestamp": datetime.now().isoformat(),
             "operation": operation,
@@ -285,6 +364,20 @@ class ClassGraph:
                 "dual_graph_legend": {
                     "P": "E_P 过程/共现（edge_leg=EDGE_LEG_PRAGMATIC）",
                     "A": "E_A 语义/联想（edge_leg=EDGE_LEG_ASSOCIATIVE，预留）",
+                },
+                "dual_nx": {
+                    "G_p": {
+                        "nodes": self.G_p.number_of_nodes(),
+                        "edges": self.G_p.number_of_edges(),
+                        "is_dag": gp_dag,
+                        "unique_star_pairs_p": len(unique_p),
+                    },
+                    "G_a": {
+                        "nodes": self.G_a.number_of_nodes(),
+                        "edges": self.G_a.number_of_edges(),
+                        "unique_star_pairs_a": len(unique_a),
+                    },
+                    "matches_edge_records": ok_nx,
                 },
             },
             "classes": []
@@ -416,6 +509,7 @@ class ClassGraph:
 
                 # 添加到edges列表
                 self.edges.append(edge_record)
+                self._apply_edge_record_to_dual_nx(edge_record)
 
                 # 为每个实例添加functions字段（双向关联）
                 for i, current_match in enumerate(matching_instances):
