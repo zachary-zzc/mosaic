@@ -15,6 +15,7 @@ import networkx as nx
 
 from src.assist import build_instance_fragments
 from src.data.dual_graph import EDGE_LEG_ASSOCIATIVE, EDGE_LEG_PRAGMATIC, normalize_edge_leg
+from src.graph.dual.hyperedge import star_oriented_pairs_from_connections
 
 ENTITY_GRAPH_SCHEMA_VERSION = 1
 
@@ -208,30 +209,20 @@ def entity_graph_from_class_graph(cg: Any) -> EntityGraphStore:
 
     for rec in getattr(cg, "edges", []) or []:
         leg = normalize_edge_leg(rec.get("edge_leg"))
-        conns = rec.get("connections") or []
-        if len(conns) < 2:
+        pairs = star_oriented_pairs_from_connections(rec.get("connections") or [])
+        if not pairs:
             continue
-        ids: list[str] = []
-        for c in conns:
-            if not isinstance(c, dict):
-                continue
-            ids.append(f"{c.get('class_id', '')}:{c.get('instance_id', '')}")
-        ids = [x for x in ids if x and not x.endswith(":")]
-        if len(ids) < 2:
-            continue
-        ids_sorted = sorted(set(ids))
-        hub = ids_sorted[0]
         prov_base: dict[str, Any] = {
             "kind": "cooccurrence_message",
             "message_label": rec.get("label"),
             "content_preview": (rec.get("content") or "")[:240],
         }
         if leg == EDGE_LEG_PRAGMATIC:
-            for t in ids_sorted[1:]:
-                store.add_edge_p(hub, t, provenance={**prov_base, "edge_leg": EDGE_LEG_PRAGMATIC})
+            for u, v in pairs:
+                store.add_edge_p(u, v, provenance={**prov_base, "edge_leg": EDGE_LEG_PRAGMATIC})
         else:
             w = float(rec.get("weight", 1.0))
-            for t in ids_sorted[1:]:
-                store.add_edge_a(hub, t, weight=w, provenance={**prov_base, "edge_leg": EDGE_LEG_ASSOCIATIVE})
+            for u, v in pairs:
+                store.add_edge_a(u, v, weight=w, provenance={**prov_base, "edge_leg": EDGE_LEG_ASSOCIATIVE})
 
     return store
