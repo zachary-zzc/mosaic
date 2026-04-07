@@ -1,4 +1,6 @@
+import json
 import os
+import time
 import requests
 import httpx
 from typing import Optional, List, Any
@@ -11,6 +13,7 @@ from openai import OpenAI, APIError, APIConnectionError, APITimeoutError
 
 from src.config_loader import get_api_key_and_base_url, get_mosaic_chat_model_spec
 from src.logger import setup_logger
+from src.llm.telemetry import record_llm_http_roundtrip
 
 _logger = setup_logger("llm")
 
@@ -44,6 +47,49 @@ def _get_dashscope_client(api_key: str, base_url: str) -> OpenAI:
             timeout=timeout,
         )
     return _openai_clients[cache_key]
+
+
+def _completion_message_text(choice: Any) -> str:
+    """
+    从 OpenAI Chat Completions 的 assistant message 提取可解析的正文。
+    部分网关/模型在 json_object 或兼容层下会把 content 置空，而 JSON 出现在 tool_calls.function.arguments 等字段。
+    """
+    raw = getattr(choice, "content", None)
+    if isinstance(raw, str) and raw.strip():
+        return raw
+    if raw is not None and not isinstance(raw, str):
+        # 少数实现返回结构化 content（如 list[dict]）
+        try:
+            dumped = json.dumps(raw, ensure_ascii=False)
+        except (TypeError, ValueError):
+            dumped = str(raw)
+        if dumped.strip():
+            return dumped
+
+    tool_calls = getattr(choice, "tool_calls", None) or []
+    for tc in tool_calls:
+        fn = getattr(tc, "function", None)
+        if fn is None:
+            continue
+        args = getattr(fn, "arguments", None)
+        if isinstance(args, str) and args.strip():
+            return args
+
+    parsed = getattr(choice, "parsed", None)
+    if parsed is not None:
+        try:
+            return json.dumps(parsed, ensure_ascii=False)
+        except (TypeError, ValueError):
+            pass
+
+    rc = getattr(choice, "reasoning_content", None)
+    if isinstance(rc, str) and rc.strip():
+        return rc.strip()
+
+    if isinstance(raw, str):
+        return raw
+    return ""
+
 
 class CustomChatModel(BaseChatModel):
     """Custom Chat Model that interfaces with a custom server."""
@@ -83,12 +129,29 @@ class CustomChatModel(BaseChatModel):
             "messages": [convert_message(msg) for msg in messages],
         }
 
+        t0 = time.perf_counter()
         try:
             response = requests.post(self.model_url, json=payload, stream=False)
             response.raise_for_status()
-            return response.json()["choices"][0]["message"]["content"]
+            text = response.json()["choices"][0]["message"]["content"]
+            dt_ms = (time.perf_counter() - t0) * 1000.0
+            record_llm_http_roundtrip(
+                duration_ms=dt_ms,
+                messages=payload.get("messages") or [],
+                response_text=text or "",
+                model_name=str(self.model_name),
+            )
+            return text
         except requests.exceptions.RequestException as e:
-            return f"Error: {e}"
+            dt_ms = (time.perf_counter() - t0) * 1000.0
+            err = f"Error: {e}"
+            record_llm_http_roundtrip(
+                duration_ms=dt_ms,
+                messages=payload.get("messages") or [],
+                response_text=err,
+                model_name=str(self.model_name),
+            )
+            return err
 
     def _generate(
         self,
@@ -160,6 +223,7 @@ class QwenChatModel(BaseChatModel):
         }
         if response_format is not None:
             create_kwargs["response_format"] = response_format
+        t0 = time.perf_counter()
         try:
             completion = client.chat.completions.create(**create_kwargs)
         except APIError as e:
@@ -184,9 +248,22 @@ class QwenChatModel(BaseChatModel):
             raise
 
         choice = completion.choices[0].message
-        if choice.content is None:
-            _logger.warning("DashScope 返回 content 为空，model=%s", self.model_name)
-        return choice.content or ""
+        text = _completion_message_text(choice)
+        dt_ms = (time.perf_counter() - t0) * 1000.0
+        record_llm_http_roundtrip(
+            duration_ms=dt_ms,
+            messages=list(create_kwargs.get("messages") or []),
+            response_text=text or "",
+            model_name=str(self.model_name),
+        )
+        if not (text or "").strip():
+            _logger.warning(
+                "DashScope 返回可解析正文为空 model=%s (content=%r tool_calls=%s)",
+                self.model_name,
+                getattr(choice, "content", None),
+                bool(getattr(choice, "tool_calls", None)),
+            )
+        return text
 
     def _generate(
         self,

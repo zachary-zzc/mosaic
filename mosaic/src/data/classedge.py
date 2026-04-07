@@ -1,1 +1,18 @@
+"""边类型别名：权威定义在 ``src.data.dual_graph``（P-1 / 手稿 DualGraph）。"""
+from src.data.dual_graph import (
+    ALL_EDGE_LEGS,
+    EDGE_KIND_MESSAGE_COOCCURRENCE,
+    EDGE_KIND_PREREQUISITE_LLM,
+    EDGE_KIND_SEMANTIC_BGE,
+    EDGE_LEG_ASSOCIATIVE,
+    EDGE_LEG_PRAGMATIC,
+)
 
+__all__ = [
+    "ALL_EDGE_LEGS",
+    "EDGE_KIND_MESSAGE_COOCCURRENCE",
+    "EDGE_KIND_PREREQUISITE_LLM",
+    "EDGE_KIND_SEMANTIC_BGE",
+    "EDGE_LEG_ASSOCIATIVE",
+    "EDGE_LEG_PRAGMATIC",
+]

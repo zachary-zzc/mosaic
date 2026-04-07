@@ -1,0 +1,12 @@
+{
+    "speaker_a": "A",
+    "speaker_b": "B",
+    "session_1_date_time": "10:00 on 1 Jan 2024",
+    "session_1": [
+        {"speaker": "A", "text": "I joined a book club last week."},
+        {"speaker": "B", "text": "Nice! What book are you reading?"},
+        {"speaker": "A", "text": "We are reading The Great Gatsby. I love it."},
+        {"speaker": "B", "text": "I read that in 2022. Who is your favorite character?"},
+        {"speaker": "A", "text": "I like Nick. He is the narrator."}
+    ]
+}

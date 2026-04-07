@@ -36,13 +36,31 @@ def star_oriented_pairs_from_connections(connections: list[Any]) -> list[tuple[s
     return [(hub, t) for t in ids[1:]]
 
 
+def oriented_ep_pairs_from_record(rec: dict[str, Any]) -> list[tuple[str, str]]:
+    """
+    E_P 有向弧展开：若记录含 ``ep_oriented_pairs``（手稿式显式先决 u→v），优先使用；
+    否则沿用共现超边的星形定向（字典序 hub→leaf，保证 DAG 友好）。
+    """
+    raw = rec.get("ep_oriented_pairs")
+    if isinstance(raw, list) and raw:
+        out: list[tuple[str, str]] = []
+        for item in raw:
+            if isinstance(item, (list, tuple)) and len(item) == 2:
+                u, v = str(item[0]).strip(), str(item[1]).strip()
+                if u and v and u != v:
+                    out.append((u, v))
+        if out:
+            return out
+    return star_oriented_pairs_from_connections(rec.get("connections") or [])
+
+
 def unique_directed_star_pairs_p(edge_records: list[dict[str, Any]]) -> set[tuple[str, str]]:
-    """所有 E_P 记录星形展开后的有向边集合（去重），应与 ``DiGraph(G_p).edges`` 一致。"""
+    """所有 E_P 记录展开后的有向边集合（含 ``ep_oriented_pairs``），应与 ``DiGraph(G_p).edges`` 一致。"""
     out: set[tuple[str, str]] = set()
     for rec in edge_records or []:
         if normalize_edge_leg(rec.get("edge_leg")) != EDGE_LEG_PRAGMATIC:
             continue
-        for u, v in star_oriented_pairs_from_connections(rec.get("connections") or []):
+        for u, v in oriented_ep_pairs_from_record(rec):
             out.add((u, v))
     return out
 

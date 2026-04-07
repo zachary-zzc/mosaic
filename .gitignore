@@ -23,6 +23,7 @@ wheels/
 
 # Virtual environments
 .venv/
+.venv_*/
 venv/
 ENV/
 env/
@@ -37,8 +38,21 @@ env/
 
 # === Misc ===
 *.json
-# EntityGraph 等 JSON Schema 契约需入库（见 docs/optimization.md A-1）
+# EntityGraph JSON Schema contracts must be tracked (see docs/optimization.md A-1)
 !mosaic/schemas/*.json
+# Dataset files must be tracked
+!dataset/**/*.json
+# Example data must be tracked
+!example/*.json
+
+# Example pipeline outputs (graphs, LLM I/O, eval results)
+example/output/*.pkl
+
+# Experiment run artifacts (large: graph snapshots, LLM I/O, eval results)
+experiments/**/runs/**
+experiments/**/results/**
+!experiments/**/results/.gitkeep
+!experiments/**/runs/.gitkeep
 
 # === Mosaic: config & secrets ===
 config/*.cfg
@@ -46,9 +60,11 @@ config/*.cfg
 .env.*
 
 # === Mosaic: embedding models (large binaries) ===
+mosaic/embedding_models/
 mosaic/src/embedding_models/
 
 # === Mosaic: runtime / results ===
+mosaic/log/
 mosaic/src/locomo results/
 mosaic/src/error_case/results/
 mosaic/src/error_case/conflict/results/
@@ -71,3 +87,4 @@ mosaic/src/error_case/conflict/results/
 # === OS ===
 .DS_Store
 Thumbs.db
+nohup.out

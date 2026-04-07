@@ -15,7 +15,7 @@ import networkx as nx
 
 from src.assist import build_instance_fragments
 from src.data.dual_graph import EDGE_LEG_ASSOCIATIVE, EDGE_LEG_PRAGMATIC, normalize_edge_leg
-from src.graph.dual.hyperedge import star_oriented_pairs_from_connections
+from src.graph.dual.hyperedge import oriented_ep_pairs_from_record, star_oriented_pairs_from_connections
 
 ENTITY_GRAPH_SCHEMA_VERSION = 1
 
@@ -178,13 +178,15 @@ def entity_graph_from_class_graph(cg: Any) -> EntityGraphStore:
     except Exception:
         dual_counts = None
 
-    store.set_legacy_graph_info(
-        {
-            "total_classes": len(getattr(cg.graph, "nodes", []) or []),
-            "total_edge_records": len(getattr(cg, "edges", []) or []),
-            "dual_graph_edge_counts": dual_counts,
-        }
-    )
+    legacy: dict[str, Any] = {
+        "total_classes": len(getattr(cg.graph, "nodes", []) or []),
+        "total_edge_records": len(getattr(cg, "edges", []) or []),
+        "dual_graph_edge_counts": dual_counts,
+    }
+    tel = getattr(cg, "sense_class_telemetry_cumulative", None)
+    if isinstance(tel, dict):
+        legacy["construction_telemetry"] = dict(tel)
+    store.set_legacy_graph_info(legacy)
 
     for class_node in cg.graph.nodes:
         cid = getattr(class_node, "class_id", None) or "unknown_class"
@@ -207,20 +209,30 @@ def entity_graph_from_class_graph(cg: Any) -> EntityGraphStore:
                 },
             )
 
+    comms = getattr(cg, "_entity_communities", None)
+    if isinstance(comms, dict) and comms:
+        store.set_communities(comms)
+
     for rec in getattr(cg, "edges", []) or []:
         leg = normalize_edge_leg(rec.get("edge_leg"))
-        pairs = star_oriented_pairs_from_connections(rec.get("connections") or [])
-        if not pairs:
-            continue
         prov_base: dict[str, Any] = {
             "kind": "cooccurrence_message",
             "message_label": rec.get("label"),
             "content_preview": (rec.get("content") or "")[:240],
         }
+        extra = rec.get("provenance")
+        if isinstance(extra, dict):
+            prov_base = {**prov_base, **extra}
         if leg == EDGE_LEG_PRAGMATIC:
+            pairs = oriented_ep_pairs_from_record(rec)
+            if not pairs:
+                continue
             for u, v in pairs:
                 store.add_edge_p(u, v, provenance={**prov_base, "edge_leg": EDGE_LEG_PRAGMATIC})
         else:
+            pairs = star_oriented_pairs_from_connections(rec.get("connections") or [])
+            if not pairs:
+                continue
             w = float(rec.get("weight", 1.0))
             for u, v in pairs:
                 store.add_edge_a(u, v, weight=w, provenance={**prov_base, "edge_leg": EDGE_LEG_ASSOCIATIVE})

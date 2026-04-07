@@ -1,10 +1,17 @@
 from __future__ import annotations
-from typing import Dict, List, Any, Tuple,TYPE_CHECKING
+
+import os
+from typing import Dict, List, Any, Tuple, TYPE_CHECKING
 
 from src.assist import similarity_score
 import numpy as np
 from src.logger import setup_logger
-from src.data.instance import  update_data_from_messages,create_instances_from_messages
+from src.data.instance import (
+    create_instances_from_messages,
+    create_instances_from_messages_hash,
+    merge_canonical_message_labels,
+    update_data_from_messages,
+)
 from src.assist import build_instance_fragments,calculate_tfidf_similarity
 _logger = setup_logger("class cudr")
 
@@ -261,13 +268,23 @@ class ClassNode:
             if found_index == -1 or existing_instance is None:
                 _logger.warning(f"未找到实例ID为 {instance_id} 的实例，跳过更新")
                 continue
-            if use_hash:
+            existing_messages = existing_instance.get('messages', []) if isinstance(existing_instance, dict) else []
+            try:
+                if use_hash:
+                    updated_instance = update_data_from_messages_hash(existing_instance, messages)
+                else:
+                    message_strings = [m.get("message", m) if isinstance(m, dict) else str(m) for m in messages]
+                    updated_instance = update_data_from_messages(existing_instance, message_strings)
+                    updated_instance['messages'] = existing_messages + messages
+            except Exception as e:
+                _logger.warning(
+                    "实例 %s LLM 更新异常，本实例 hash 降级并继续其它实例: %s",
+                    instance_id,
+                    e,
+                )
                 updated_instance = update_data_from_messages_hash(existing_instance, messages)
-            else:
-                message_strings = [m.get("message", m) if isinstance(m, dict) else str(m) for m in messages]
-                updated_instance = update_data_from_messages(existing_instance, message_strings)
-                existing_messages = existing_instance.get('messages', []) if isinstance(existing_instance, dict) else []
                 updated_instance['messages'] = existing_messages + messages
+            merge_canonical_message_labels(updated_instance, messages)
             self._instances[found_index] = updated_instance
         self._class_formatter_by_instance()
         _logger.debug("已完成 %d 个实例的更新", len(instance_id_to_messages))
@@ -280,7 +297,6 @@ class ClassNode:
             unmatched_messages_by_node: 类节点 -> {messages, context_messages}，用于创建新实例
             use_hash: 若 True 使用 create_instances_from_messages_hash，不调用 LLM
         """
-        from src.data.instance import create_instances_from_messages_hash
         current_instance_count = len(self._instances)
         instances_added = 0
 
@@ -294,12 +310,49 @@ class ClassNode:
 
             if use_hash:
                 new_instances = create_instances_from_messages_hash(messages, context_messages, _class_node)
+                for instance in new_instances:
+                    merge_canonical_message_labels(instance, messages)
             else:
-                new_instances = create_instances_from_messages(
-                    messages,
-                    context_messages,
-                    _class_node
+                new_instances = []
+                batch_ok = os.environ.get("MOSAIC_BUILD_INSTANCE_LLM_BATCH", "1").strip().lower() not in (
+                    "0",
+                    "false",
+                    "no",
                 )
+                # 优先整批一次 LLM（显著减少 HTTP 次数）；失败或空结果再逐条（与旧行为兼容）
+                if batch_ok and messages:
+                    try:
+                        batch_part = create_instances_from_messages(
+                            messages, context_messages, _class_node
+                        )
+                        if batch_part:
+                            for instance in batch_part:
+                                merge_canonical_message_labels(instance, messages)
+                            new_instances.extend(batch_part)
+                    except Exception as e:
+                        _logger.warning(
+                            "类 %s 批量创建实例 LLM 异常，改为逐条: %s",
+                            getattr(_class_node, "class_id", "?"),
+                            e,
+                        )
+                if not new_instances:
+                    for msg_item in messages:
+                        try:
+                            part = create_instances_from_messages(
+                                [msg_item], context_messages, _class_node
+                            )
+                        except Exception as e:
+                            _logger.warning(
+                                "类 %s 单条消息创建实例异常，本消息 hash 降级: %s",
+                                getattr(_class_node, "class_id", "?"),
+                                e,
+                            )
+                            part = create_instances_from_messages_hash(
+                                [msg_item], context_messages, _class_node
+                            )
+                        for instance in part:
+                            merge_canonical_message_labels(instance, [msg_item])
+                        new_instances.extend(part)
 
             for instance in new_instances:
                 instance["instance_id"] = f"instance_{current_instance_count + 1}"

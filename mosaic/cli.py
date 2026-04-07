@@ -34,15 +34,41 @@ def _conv_name_from_path(path: str) -> str:
     return name.replace("locomo_", "").replace(".json", "").replace(".JSON", "")
 
 
+def _apply_log_prompt_arg(args: argparse.Namespace, *, default_beside: str | None) -> None:
+    """--log-prompt [PATH]：设置 MOSAIC_LLM_IO_LOG（完整 prompt/response JSONL）。"""
+    v = getattr(args, "log_prompt", None)
+    if v is None:
+        return
+    if v == "__AUTO__":
+        if default_beside:
+            path = str(Path(default_beside).resolve().parent / "llm_io.jsonl")
+        else:
+            path = str(Path.cwd() / "llm_io.jsonl")
+    else:
+        path = os.path.abspath(v)
+    os.environ["MOSAIC_LLM_IO_LOG"] = path
+
+
+def _default_build_checkpoint_path(graph_out: str | None) -> str | None:
+    """与 --graph-out 同目录、同主名的构图状态 pickle（含 .meta.json）。"""
+    if not graph_out:
+        return None
+    return os.path.abspath(graph_out) + ".build_state.pkl"
+
+
 def cmd_build(args: argparse.Namespace) -> int:
     _apply_logging(args.verbose)
+    _apply_log_prompt_arg(
+        args,
+        default_beside=args.graph_out or os.environ.get("GRAPH_SAVE_DIR"),
+    )
     if getattr(args, "progress_file", None):
         os.environ["MOSAIC_PROGRESS_FILE"] = os.path.abspath(args.progress_file)
     if getattr(args, "graph_save_dir", None):
         os.environ["GRAPH_SAVE_DIR"] = os.path.abspath(args.graph_save_dir)
 
     from src.config_loader import get_mosaic_build_mode
-    from src.save import save, save_hash
+    from src.save import remove_build_checkpoint, save, save_hash
 
     with open(args.conv_json, "r", encoding="utf-8") as f:
         data = json.load(f)
@@ -52,6 +78,12 @@ def cmd_build(args: argparse.Namespace) -> int:
     hash_only = bool(args.hash) or cfg_mode == "hash_only"
     os.environ["MOSAIC_BUILD_EFFECTIVE"] = "hash_only" if hash_only else "hybrid"
 
+    ck = getattr(args, "checkpoint", None) or os.environ.get("MOSAIC_BUILD_CHECKPOINT", "").strip() or None
+    if not ck and args.graph_out:
+        ck = _default_build_checkpoint_path(args.graph_out)
+    resume = bool(getattr(args, "resume", False))
+    src_path = os.path.abspath(args.conv_json)
+
     if hash_only:
         save_hash(
             data,
@@ -59,34 +91,53 @@ def cmd_build(args: argparse.Namespace) -> int:
             graph_save_dir=args.graph_save_dir,
             final_graph_path=args.graph_out,
             final_tags_path=args.tags_out,
+            checkpoint_path=ck,
+            resume=resume,
+            source_path=src_path,
         )
     else:
-        memory = save(data, conv_name)
+        memory = save(
+            data,
+            conv_name,
+            checkpoint_path=ck,
+            resume=resume,
+            source_path=src_path,
+        )
         if args.graph_out:
             outp = os.path.abspath(args.graph_out)
             os.makedirs(os.path.dirname(outp) or ".", exist_ok=True)
             with open(outp, "wb") as f:
-                pickle.dump(memory.graph, f)
+                pickle.dump(memory, f, protocol=pickle.HIGHEST_PROTOCOL)
         if args.tags_out:
             memory.generate_tags_tfidf(args.tags_out)
+    remove_build_checkpoint(ck)
     return 0
 
 
 def cmd_query(args: argparse.Namespace) -> int:
     _apply_logging(args.verbose)
+    _apply_log_prompt_arg(args, default_beside=args.graph_pkl)
 
-    from src.assist import load_graphs
-    from src.data.graph import ClassGraph
-    from src.query import process_single_qa, query
+    from src.assist import load_mosaic_memory_pickle
+    from src.query import process_single_qa, query_with_telemetry
 
     method = args.method or "hash"
 
     if args.question:
-        memory = ClassGraph()
-        memory.graph = load_graphs(args.graph_pkl)
+        memory = load_mosaic_memory_pickle(args.graph_pkl)
         memory.process_kw(args.tags_json)
-        ans = query(args.question, memory, method=method)
-        print(ans)
+        out = query_with_telemetry(args.question, memory, method=method)
+        print(out.get("answer", ""))
+        show = not bool(getattr(args, "no_show_retrieval", False))
+        if show:
+            import json as _json
+
+            print("\n--- retrieved_context (摘要) ---", flush=True)
+            print(_json.dumps(out.get("retrieved_context"), ensure_ascii=False, indent=2), flush=True)
+            print("\n--- timing_ms ---", flush=True)
+            print(_json.dumps(out.get("timing_ms"), ensure_ascii=False, indent=2), flush=True)
+            print("\n--- graph_stats ---", flush=True)
+            print(_json.dumps(out.get("graph_stats"), ensure_ascii=False, indent=2), flush=True)
         return 0
 
     if args.qa_json:
@@ -100,6 +151,7 @@ def cmd_query(args: argparse.Namespace) -> int:
             summary_file_path=summ,
             max_questions=args.max_questions,
             method=method,
+            resume=bool(getattr(args, "resume", False)),
         )
         return 0
 
@@ -138,18 +190,20 @@ def cmd_run(args: argparse.Namespace) -> int:
         summary_out=args.summary_out,
         output=args.output,
         max_questions=args.max_questions,
+        resume=getattr(args, "resume", False),
+        log_prompt=getattr(args, "log_prompt", None),
+        no_show_retrieval=getattr(args, "no_show_retrieval", False),
     )
     return cmd_query(qargs)
 
 
 def cmd_chat(args: argparse.Namespace) -> int:
     _apply_logging(args.verbose)
-    from src.assist import load_graphs
-    from src.data.graph import ClassGraph
+    _apply_log_prompt_arg(args, default_beside=args.graph_pkl)
+    from src.assist import load_mosaic_memory_pickle
     from src.query import query
 
-    memory = ClassGraph()
-    memory.graph = load_graphs(args.graph_pkl)
+    memory = load_mosaic_memory_pickle(args.graph_pkl)
     memory.process_kw(args.tags_json)
     method = args.method or "hash"
 
@@ -192,6 +246,24 @@ def _build_parser() -> argparse.ArgumentParser:
     pb.add_argument("--graph-out", default=None, help="将最终图 pickle 到此路径（LLM 构图时可选）")
     pb.add_argument("--tags-out", default=None, help="构图后生成 TF-IDF tags JSON")
     pb.add_argument("--progress-file", default=None, help="写入批次进度（同 MOSAIC_PROGRESS_FILE）")
+    pb.add_argument(
+        "--checkpoint",
+        default=None,
+        help="构图断点 pickle 路径（默认: 与 --graph-out 同名的 .build_state.pkl；可用 MOSAIC_BUILD_CHECKPOINT）",
+    )
+    pb.add_argument(
+        "--resume",
+        action="store_true",
+        help="从断点继续构图（需对话 JSON 与断点指纹一致；每批自动落盘）",
+    )
+    pb.add_argument(
+        "--log-prompt",
+        nargs="?",
+        const="__AUTO__",
+        default=None,
+        metavar="PATH",
+        help="LLM I/O JSONL（省略 PATH 时写入 --graph-out 或 GRAPH_SAVE_DIR 上级目录 llm_io.jsonl）",
+    )
     pb.set_defaults(_fn=cmd_build)
 
     pq = sub.add_parser(
@@ -207,6 +279,24 @@ def _build_parser() -> argparse.ArgumentParser:
     pq.add_argument("--summary-out", default=None, help="批量评测汇总 JSON 路径")
     pq.add_argument("--output", default=None, help="批量评测占位输出路径（可选）")
     pq.add_argument("--max-questions", type=int, default=None, help="最多评测题数")
+    pq.add_argument(
+        "--resume",
+        action="store_true",
+        help="QA 断点续跑：若存在 <output>.partial.json 则跳过已评测题并追加",
+    )
+    pq.add_argument(
+        "--log-prompt",
+        nargs="?",
+        const="__AUTO__",
+        default=None,
+        metavar="PATH",
+        help="LLM I/O JSONL（省略 PATH 时写入 graph-pkl 同目录 llm_io.jsonl）",
+    )
+    pq.add_argument(
+        "--no-show-retrieval",
+        action="store_true",
+        help="单题 query 时不打印 retrieved_context / timing / graph_stats",
+    )
     pq.set_defaults(_fn=cmd_query)
 
     pr = sub.add_parser("run", help="执行 build 后立刻用 --graph-out / --tags-out 做 query")
@@ -223,12 +313,35 @@ def _build_parser() -> argparse.ArgumentParser:
     pr.add_argument("--summary-out", default=None)
     pr.add_argument("--output", default=None)
     pr.add_argument("--max-questions", type=int, default=None)
+    pr.add_argument("--checkpoint", default=None, help="构图断点路径（默认由 --graph-out 推导）")
+    pr.add_argument("--resume", action="store_true", help="构图与（若指定 qa）QA 均尝试断点续跑")
+    pr.add_argument(
+        "--no-show-retrieval",
+        action="store_true",
+        help="单题 query 时不打印检索摘要（与 query 子命令一致）",
+    )
+    pr.add_argument(
+        "--log-prompt",
+        nargs="?",
+        const="__AUTO__",
+        default=None,
+        metavar="PATH",
+        help="LLM I/O JSONL（省略 PATH 时写入 --graph-out 同目录 llm_io.jsonl）",
+    )
     pr.set_defaults(_fn=cmd_run)
 
     pc = sub.add_parser("chat", help="加载图与 tags 后交互式问答（readline）")
     pc.add_argument("--graph-pkl", required=True)
     pc.add_argument("--tags-json", required=True)
     pc.add_argument("--method", choices=("llm", "hash"), default="hash")
+    pc.add_argument(
+        "--log-prompt",
+        nargs="?",
+        const="__AUTO__",
+        default=None,
+        metavar="PATH",
+        help="LLM I/O JSONL",
+    )
     pc.set_defaults(_fn=cmd_chat)
 
     return p

@@ -1,5 +1,6 @@
 import logging
 import os
+from datetime import datetime, timezone
 
 
 class InMemoryLogHandler(logging.Handler):
@@ -17,13 +18,34 @@ class InMemoryLogHandler(logging.Handler):
         self.logs.append(msg)
 
 
+def log_pipeline_event(message: str) -> None:
+    """
+    流水线事件（仅时间戳 + 一行说明，不含 prompt）。
+    设置 MOSAIC_VERBOSE_LOG 为文件路径即写入（与子进程是否 --verbose 无关）。
+    """
+    path = os.environ.get("MOSAIC_VERBOSE_LOG", "").strip()
+    if not path:
+        return
+    ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    line = f"{ts}\t{message}\n"
+    try:
+        d = os.path.dirname(os.path.abspath(path)) or "."
+        os.makedirs(d, exist_ok=True)
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(line)
+    except OSError:
+        pass
+
+
 def setup_logger(name: str) -> logging.Logger:
     """
-    设置 logger：文件始终 DEBUG（prompt、TF-IDF 细节、节点变更等）。
+    设置 logger。
     控制台：
       - 未设 MOSAIC_VERBOSE=1 且未显式覆盖时：WARNING（避免刷屏；构图进度请用 tqdm 或进度文件）
       - MOSAIC_VERBOSE=1：DEBUG（与 --verbose 一致）
       - MOSAIC_CONSOLE_MIN_LEVEL 优先于上述规则（兼容服务器脚本）
+    文件：
+      - 默认 INFO（不写 DEBUG 级 prompt/TF-IDF 大块文本）；MOSAIC_LOG_FILE_LEVEL=DEBUG 恢复全文调试日志
     """
     logger = logging.getLogger(name)
     logger.setLevel(logging.DEBUG)
@@ -59,7 +81,9 @@ def setup_logger(name: str) -> logging.Logger:
             log_path = os.path.join(log_dir, "server.log")
 
         fh = logging.FileHandler(log_path, mode='a', encoding='utf-8')
-        fh.setLevel(logging.DEBUG)
+        file_lvl_name = os.environ.get("MOSAIC_LOG_FILE_LEVEL", "INFO").strip().upper()
+        file_lvl = getattr(logging, file_lvl_name, logging.INFO)
+        fh.setLevel(file_lvl)
         fh.setFormatter(formatter)
         logger.addHandler(fh)
 

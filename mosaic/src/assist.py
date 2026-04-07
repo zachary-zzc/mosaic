@@ -109,8 +109,13 @@ def build_instance_fragments(instance):
     # 2. 每个属性作为一个独立片段
     if "attributes" in instance and isinstance(instance["attributes"], dict):
         for attr_name, attr_content in instance["attributes"].items():
-            attr_value = str(attr_content.get("value", ""))
-            attr_description = attr_content.get("description", "")
+            if isinstance(attr_content, dict):
+                attr_value = str(attr_content.get("value", ""))
+                attr_description = attr_content.get("description", "")
+            else:
+                # LLM/历史数据可能将属性值存为纯字符串等非 dict 形态
+                attr_value = str(attr_content) if attr_content is not None else ""
+                attr_description = ""
 
             # 构建属性片段文本
             if attr_value or attr_description:
@@ -125,7 +130,10 @@ def build_instance_fragments(instance):
     # 3. 每个操作函数作为一个独立片段
     if "operations" in instance and isinstance(instance["operations"], dict):
         for op_name, op_content in instance["operations"].items():
-            op_description = op_content.get("description", "")
+            if isinstance(op_content, dict):
+                op_description = op_content.get("description", "")
+            else:
+                op_description = str(op_content) if op_content is not None else ""
 
             # 构建操作片段文本
             fragment_text = f"{op_name}"
@@ -271,19 +279,28 @@ def serialize_instance(data):
         result_lines.append(f"\n─── instance {i}: {instance_name} ───")
         # 处理属性信息
         attributes = instance.get('attributes', {})
-        if attributes:
+        if attributes and isinstance(attributes, dict):
             for attr_name, attr_content in attributes.items():
-                description = attr_content.get('description', 'no description')
-                value = attr_content.get('value', 'no value')
-                occurred = attr_content.get('occurred', 'none')
-                recorded_at = attr_content.get('recorded_at', 'none')
+                if isinstance(attr_content, dict):
+                    description = attr_content.get('description', 'no description')
+                    value = attr_content.get('value', 'no value')
+                    occurred = attr_content.get('occurred', 'none')
+                    recorded_at = attr_content.get('recorded_at', 'none')
+                else:
+                    description = f"(attribute {attr_name})"
+                    value = attr_content if attr_content is not None else 'no value'
+                    occurred = 'none'
+                    recorded_at = 'none'
 
                 result_lines.append(f"Description: {description};Value: {value};Occurred Time: {occurred};Recorded Time: {recorded_at}")
         # 处理操作信息
         operations = instance.get('operations', {})
-        if operations:
+        if operations and isinstance(operations, dict):
             for op_name, op_content in operations.items():
-                description = op_content.get('description', 'no description')
+                if isinstance(op_content, dict):
+                    description = op_content.get('description', 'no description')
+                else:
+                    description = op_content if op_content is not None else 'no description'
                 result_lines.append(f"Operation Name: {op_name};Operation Description: {description}")
         # 处理未分类字段
         if uninstance_field:
@@ -312,8 +329,10 @@ def query_question(
     prompt = Template(prompt_template).substitute(
         {"QUESTION": question, "INFORMATION": info_str}
     )
-    _logger.debug("query prompt: %s", prompt)
-    response = llm.invoke(prompt)
+    from src.llm.telemetry import llm_call_scope
+
+    with llm_call_scope("query.answer"):
+        response = llm.invoke(prompt)
     content = getattr(response, "content", None) or str(response)
     parsed = parse_llm_json_object(content)
     if parsed is not None:
@@ -561,6 +580,22 @@ def save_to_file(filepath: str, nodes_data: Any) -> None:
 def load_graphs(filepath: str) -> Any:
     """Backward-compatible: load graph from pickle."""
     return _io.read_pickle(filepath)
+
+
+def load_mosaic_memory_pickle(filepath: str) -> Any:
+    """
+    加载 query/QA 用 ClassGraph：支持完整 ClassGraph pickle（含 edges、G_p、G_a）或旧版仅 nx.Graph。
+    """
+    from src.data.graph import ClassGraph
+
+    obj = _io.read_pickle(filepath)
+    if isinstance(obj, ClassGraph):
+        if hasattr(obj, "_rebuild_dual_nx_from_edges"):
+            obj._rebuild_dual_nx_from_edges()
+        return obj
+    memory = ClassGraph()
+    memory.graph = obj
+    return memory
 
 def keywords_process(keywords: List) -> List[str]:
     """将 (keyword, score) 元组或字符串列表转为关键词字符串列表。"""
