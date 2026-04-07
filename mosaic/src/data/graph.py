@@ -8,7 +8,11 @@ from datetime import datetime
 from string import Template
 from typing import Dict, List, Any, Tuple
 
-from src.config_loader import get_query_neighbor_traversal_config
+from src.config_loader import (
+    get_embedding_model_path,
+    get_query_neighbor_traversal_config,
+    get_query_retrieval_config,
+)
 from src.data.classnode import ClassNode
 from src.data.dual_graph import (
     EDGE_LEG_ASSOCIATIVE,
@@ -38,12 +42,60 @@ import pickle
 from keybert import KeyBERT
 from src.logger import setup_logger
 from src.graph.dual.hyperedge import (
+    oriented_ep_pairs_from_record,
     star_oriented_pairs_from_connections,
     unique_directed_star_pairs_p,
     unique_undirected_star_pairs_a,
 )
+from src.llm.telemetry import llm_call_scope
 
 _logger = setup_logger("graph cudr")
+
+
+def _truncate_context(text: str, max_chars: int) -> str:
+    """按实例边界截断上下文，保留前 max_chars 字符内完整的实例块。"""
+    if max_chars <= 0 or len(text) <= max_chars:
+        return text
+    # Split on instance headers to truncate at instance boundaries
+    sep = "\n─── instance "
+    parts = text.split(sep)
+    result = parts[0]
+    for part in parts[1:]:
+        candidate = result + sep + part
+        if len(candidate) > max_chars:
+            break
+        result = candidate
+    if not result.strip():
+        # Fallback: hard truncate if no instance boundary found
+        return text[:max_chars]
+    return result
+
+
+def _trim_build_context(context: Any, max_messages: int | None = None) -> Any:
+    """限制构图时传入 LLM 的上下文条数，降低 prompt 体积（MOSAIC_BUILD_CONTEXT_MAX_MESSAGES，默认 24）。"""
+    if max_messages is None:
+        raw = os.environ.get("MOSAIC_BUILD_CONTEXT_MAX_MESSAGES", "24").strip()
+        max_messages = int(raw) if raw.isdigit() else 24
+    if max_messages <= 0 or not isinstance(context, list):
+        return context
+    if len(context) <= max_messages:
+        return context
+    return context[-max_messages:]
+
+
+def _message_label_key(lab: Any) -> str:
+    if lab is None:
+        return ""
+    return str(lab).strip()
+
+
+def _instance_has_message_label(instance_dict: dict, message_label: Any) -> bool:
+    """与 ``data_item['label']`` 对齐：兼容 int/str（如 3 与 \"3\"）。"""
+    labs = instance_dict.get("message_labels")
+    if not labs:
+        return False
+    key = _message_label_key(message_label)
+    return any(_message_label_key(x) == key for x in labs)
 
 
 class ClassGraph:
@@ -69,6 +121,35 @@ class ClassGraph:
         self._graph_save_dir = os.environ.get("GRAPH_SAVE_DIR") or os.path.join(os.getcwd(), "results", "graph")
 
         self.selected_instance_keys = set()  # 用于存储已选中实例的唯一标识
+        self._retrieval_bge_accum: list[dict[str, Any]] = []  # 单次查询内多次 _fetch 的 BGE 遥测
+        # B 轨遥测（docs/optimization.md §5 B-3）：跨批次累计，供日志与快照/EntityGraph legacy
+        self.sense_class_telemetry_cumulative: dict[str, int] = {
+            "tfidf_matched_fragment_labels": 0,
+            "tfidf_unmatched_fragments": 0,
+            "llm_new_class_invocations": 0,
+            "llm_new_class_json_failures": 0,
+        }
+
+    def reset_sense_class_telemetry(self) -> None:
+        for k in self.sense_class_telemetry_cumulative:
+            self.sense_class_telemetry_cumulative[k] = 0
+
+    def __getstate__(self):
+        """构图断点 pickle：LangChain LLM 不可稳定序列化，落盘时剥离，加载后重建。"""
+        state = self.__dict__.copy()
+        state.pop("_llm", None)
+        return state
+
+    def __setstate__(self, state):
+        state.pop("_llm", None)
+        self.__dict__.update(state)
+        self._llm = fetch_default_llm_model()
+        # 旧断点无 G_p/G_a：从 self.edges 重建，保证 A-3 与 EntityGraph 导出一致
+        if not hasattr(self, "G_p") or self.G_p is None:
+            self.G_p = nx.DiGraph()
+        if not hasattr(self, "G_a") or self.G_a is None:
+            self.G_a = nx.Graph()
+        self._rebuild_dual_nx_from_edges()
 
     def __str__(self):
         return f"ClassGraph<{self.name}>"
@@ -89,13 +170,19 @@ class ClassGraph:
     def _apply_edge_record_to_dual_nx(self, rec: dict) -> None:
         """A-3：每条 ``self.edges`` 记录同时写入 G_p（E_P 有向）或 G_a（E_A 无向加权）。"""
         leg = normalize_edge_leg(rec.get("edge_leg"))
-        pairs = star_oriented_pairs_from_connections(rec.get("connections") or [])
+        if leg == EDGE_LEG_PRAGMATIC:
+            pairs = oriented_ep_pairs_from_record(rec)
+        else:
+            pairs = star_oriented_pairs_from_connections(rec.get("connections") or [])
         if not pairs:
             return
         prov = {
             "message_label": rec.get("label"),
             "content_preview": (str(rec.get("content") or ""))[:200],
         }
+        pextra = rec.get("provenance")
+        if isinstance(pextra, dict):
+            prov = {**prov, **pextra}
         if leg == EDGE_LEG_PRAGMATIC:
             for u, v in pairs:
                 self.G_p.add_edge(u, v, **prov)
@@ -199,27 +286,40 @@ class ClassGraph:
         _logger.debug(
             f"TF-IDF匹配结果: 匹配到{len(relevant_class_messages)}个类，{len(processed_labels)}个信息片段，{len(unmatched_data)}个片段未匹配")
 
+        self.sense_class_telemetry_cumulative["tfidf_matched_fragment_labels"] += len(processed_labels)
+        self.sense_class_telemetry_cumulative["tfidf_unmatched_fragments"] += len(unmatched_data)
+
         # 第二阶段：对未匹配的片段使用LLM创建新类，或归入 Unclassified（hash 模式）
         new_class_messages = {}  # 需要新增的类: class_name -> {related_message, dependent_context}
 
         if unmatched_data:
             if use_llm_for_new:
                 _logger.debug(f"对{len(unmatched_data)}个未匹配片段使用LLM创建新类")
+                self.sense_class_telemetry_cumulative["llm_new_class_invocations"] += 1
 
+                ctx_trim = _trim_build_context(context)
                 # 构建LLM提示词，只处理未匹配的片段
                 sense_prompt = Template(PROMPT_NEW_CLASS_SENSE).substitute(
                     {
                         "DATA": unmatched_data,  # 只传入未匹配的片段
-                        "CONTEXT": context
+                        "CONTEXT": ctx_trim,
                     }
                 )
 
                 _logger.debug(f"LLM感知提示词: %s", sense_prompt)
 
-                response = self._llm.invoke(sense_prompt)
-                _logger.debug(f"LLM感知响应: %s", response.content)
-                result = parse_llm_json_object(response.content)
+                result = None
+                for _retry in range(2):
+                    with llm_call_scope("build.sense_new_classes"):
+                        response = self._llm.invoke(sense_prompt)
+                    _logger.debug(f"LLM感知响应: %s", response.content)
+                    result = parse_llm_json_object(response.content)
+                    if result is not None:
+                        break
+                    _logger.warning("LLM 新类感知 JSON 解析失败 (尝试 %d/2)", _retry + 1)
+
                 if result is None:
+                    self.sense_class_telemetry_cumulative["llm_new_class_json_failures"] += 1
                     _logger.warning(
                         "LLM 新类感知返回无法解析为 JSON，未匹配片段已归入 Unclassified（见 prompt STRICT JSON 与 parse_llm_json_object）"
                     )
@@ -273,24 +373,32 @@ class ClassGraph:
         processed_classes = []
 
         for class_id, messages_dict in relevant_class_messages.items():
-            class_node = self.get_classnode(class_id)
-            if class_node is None:
-                _logger.warning(f"找不到对应的类节点: {class_id}")
+            try:
+                class_node = self.get_classnode(class_id)
+                if class_node is None:
+                    _logger.warning(f"找不到对应的类节点: {class_id}")
+                    continue
+
+                related_messages = messages_dict.get("related_message", [])
+                context_messages = messages_dict.get("dependent_context", [])
+
+                relevant_instance_messages, new_instance_messages = class_node.get_message_allocation_from_instance(
+                    related_messages, context_messages, threshold)
+
+                class_node.update_relevant_instances(relevant_instance_messages, use_hash=use_hash)
+                class_node.add_instances(new_instance_messages, use_hash=use_hash)
+
+                processed_classes.append(class_node)
+
+                _logger.debug("Processed class %s: found %d relevant instances, %d new instances",
+                             class_id, len(relevant_instance_messages), len(new_instance_messages))
+            except Exception as e:
+                _logger.exception(
+                    "处理 class_id=%s 的相关实例失败，已跳过该类并继续其它类: %s",
+                    class_id,
+                    e,
+                )
                 continue
-
-            related_messages = messages_dict.get("related_message", [])
-            context_messages = messages_dict.get("dependent_context", [])
-
-            relevant_instance_messages, new_instance_messages = class_node.get_message_allocation_from_instance(
-                related_messages, context_messages, threshold)
-
-            class_node.update_relevant_instances(relevant_instance_messages, use_hash=use_hash)
-            class_node.add_instances(new_instance_messages, use_hash=use_hash)
-
-            processed_classes.append(class_node)
-
-            _logger.debug("Processed class %s: found %d relevant instances, %d new instances",
-                         class_id, len(relevant_instance_messages), len(new_instance_messages))
         self.save_graph_snapshot()
         return processed_classes
 
@@ -306,20 +414,28 @@ class ClassGraph:
         current_class_count = len(self.graph.nodes)
         added_class_nodes = []
         for class_name, content in new_class_messages.items():
-            class_node = ClassNode.new_classnode(class_name)
-            class_id = f"class_{current_class_count + 1}"
-            class_node.class_id = class_id
+            try:
+                class_node = ClassNode.new_classnode(class_name)
+                class_id = f"class_{current_class_count + 1}"
+                class_node.class_id = class_id
 
-            class_node.process_classnode_initialization(
-                content.get("related_message", []),
-                content.get("dependent_context", []),
-                threshold=0,
-                use_hash=use_hash,
-            )
-            self.graph.add_node(class_node)
-            _logger.debug("Added new class %s: %s", class_id, class_name)
-            current_class_count += 1
-            added_class_nodes.append(class_node)
+                class_node.process_classnode_initialization(
+                    content.get("related_message", []),
+                    content.get("dependent_context", []),
+                    threshold=0,
+                    use_hash=use_hash,
+                )
+                self.graph.add_node(class_node)
+                _logger.debug("Added new class %s: %s", class_id, class_name)
+                current_class_count += 1
+                added_class_nodes.append(class_node)
+            except Exception as e:
+                _logger.exception(
+                    "新增类 %r 失败，已跳过并继续其它新类: %s",
+                    class_name,
+                    e,
+                )
+                continue
 
         self.save_graph_snapshot()
         return added_class_nodes
@@ -362,8 +478,8 @@ class ClassGraph:
                 "total_edges": len(self.graph.edges),
                 "dual_graph_edge_counts": dual_counts,
                 "dual_graph_legend": {
-                    "P": "E_P 过程/共现（edge_leg=EDGE_LEG_PRAGMATIC）",
-                    "A": "E_A 语义/联想（edge_leg=EDGE_LEG_ASSOCIATIVE，预留）",
+                    "P": "E_P 前提/过程：共现星形或 ep_oriented_pairs（LLM 先决）",
+                    "A": "E_A 关联：BGE 语义相似等（edge_leg=A，无向加权）",
                 },
                 "dual_nx": {
                     "G_p": {
@@ -379,6 +495,7 @@ class ClassGraph:
                     },
                     "matches_edge_records": ok_nx,
                 },
+                "construction_telemetry": dict(self.sense_class_telemetry_cumulative),
             },
             "classes": []
         }
@@ -427,6 +544,11 @@ class ClassGraph:
             dag_ok, dag_detail = eg_store.validate_dag()
             if not dag_ok:
                 _logger.warning("EntityGraph G_P 校验非 DAG: %s", dag_detail)
+            from src.graph.dual.verify_exports import verify_classgraph_nx_vs_entity_export
+
+            vok, vmsg = verify_classgraph_nx_vs_entity_export(self)
+            if not vok:
+                _logger.warning("A-3: EntityGraph 导出与 G_p/G_a 边集不一致: %s", vmsg)
         except Exception as exc:
             _logger.warning("EntityGraph 导出失败（不影响类图快照）: %s", exc)
 
@@ -459,7 +581,6 @@ class ClassGraph:
         # 安全处理可能的None值
         processed_classes_safe = processed_classes if processed_classes is not None else []
         new_classes_safe = new_classes if new_classes is not None else []
-        all_classes = processed_classes_safe + new_classes_safe
 
         # 遍历data中的每条信息
         for data_item in data:
@@ -470,8 +591,8 @@ class ClassGraph:
             matching_instances = []
             _logger.debug(f"message_label: %s; data_item: %s", message_label, data_item)
 
-            # 在所有类节点中查找包含当前标签的实例
-            for class_node in all_classes:
+            # 在全图类节点上查找（不仅本批 touched 类），避免漏连历史实例
+            for class_node in self.graph.nodes:
                 if not hasattr(class_node, '_instances') or not class_node._instances:
                     continue
 
@@ -480,7 +601,7 @@ class ClassGraph:
                     #_logger.debug(f"instance_message_label: {instance_dict['message_labels']}")
 
                     # 检查实例的message_labels是否包含当前标签
-                    if message_label in instance_dict['message_labels']:
+                    if _instance_has_message_label(instance_dict, message_label):
                         # _logger.debug(f"message_label matched: {message_label}")
                         matching_instances.append({
                             'class_node': class_node,
@@ -538,9 +659,24 @@ class ClassGraph:
 
         # 记录处理结果
         _logger.debug(f"关系更新完成：建立了 {len(self.edges)} 个关联边")
-        _logger.debug(f"处理了 {len(data)} 条数据，涉及 {len(all_classes)} 个类节点")
+        _logger.debug(
+            "处理了 %d 条数据；本批 touched 类 %d 个，全图类节点 %d 个",
+            len(data),
+            len(processed_classes_safe) + len(new_classes_safe),
+            len(self.graph.nodes),
+        )
 
         self.save_graph_snapshot()
+
+    def enrich_dual_graph_edges_post_build(self) -> dict[str, Any]:
+        """
+        构图全批次结束后：BGE 建 E_A、可选 LLM 非对称先决 E_P（DAG 安全），并刷新快照 / EntityGraph。
+
+        见 docs/optimization.md §5 B-2、``[EDGE]`` 配置、``src/graph/dual/edge_construction.py``。
+        """
+        from src.graph.dual.edge_construction import enrich_class_graph_dual_edges
+
+        return enrich_class_graph_dual_edges(self, llm=getattr(self, "_llm", None))
 
     def message_passing(self):
         pass
@@ -644,10 +780,16 @@ class ClassGraph:
                         }
                     )
                     _logger.debug(f"conflict prompt: %s", conflict_prompt)
-                    response = self._llm.invoke(conflict_prompt)
-                    conflict_raw = getattr(response, "content", None) or str(response)
-                    _logger.debug(f"conflict prompt response: %s", conflict_raw)
-                    result = parse_llm_json_object(conflict_raw)
+                    result = None
+                    for _retry in range(2):
+                        with llm_call_scope("build.conflict_existing"):
+                            response = self._llm.invoke(conflict_prompt)
+                        conflict_raw = getattr(response, "content", None) or str(response)
+                        _logger.debug(f"conflict prompt response: %s", conflict_raw)
+                        result = parse_llm_json_object(conflict_raw)
+                        if result is not None:
+                            break
+                        _logger.warning("冲突检测(existing) JSON 解析失败 (尝试 %d/2)", _retry + 1)
                     if result is None:
                         _logger.warning("冲突检测 LLM 回复无法解析为 JSON，跳过该 existing_class。")
                         continue
@@ -684,10 +826,16 @@ class ClassGraph:
                         }
                     )
                     _logger.debug(f"conflict prompt: %s", conflict_prompt)
-                    response = self._llm.invoke(conflict_prompt)
-                    conflict_raw = getattr(response, "content", None) or str(response)
-                    _logger.debug(f"conflict prompt response: %s", conflict_raw)
-                    result = parse_llm_json_object(conflict_raw)
+                    result = None
+                    for _retry in range(2):
+                        with llm_call_scope("build.conflict_new"):
+                            response = self._llm.invoke(conflict_prompt)
+                        conflict_raw = getattr(response, "content", None) or str(response)
+                        _logger.debug(f"conflict prompt response: %s", conflict_raw)
+                        result = parse_llm_json_object(conflict_raw)
+                        if result is not None:
+                            break
+                        _logger.warning("冲突检测(new) JSON 解析失败 (尝试 %d/2)", _retry + 1)
                     if result is None:
                         _logger.warning("冲突检测 LLM 回复无法解析为 JSON，跳过该 new_class。")
                         continue
@@ -769,7 +917,11 @@ class ClassGraph:
         """
         P-2：实例级无向邻接。与 P-1 一致：``self.edges`` 中 ``edge_leg`` 区分 E_P / E_A；
         ``functions`` 来自构图时共现边，视为 E_P。
+        结果按 allowed_legs 缓存，避免同一查询中重复构建。
         """
+        cache = getattr(self, "_adj_cache", None)
+        if cache is not None and cache[0] == allowed_legs:
+            return cache[1]
         adj: dict[str, set[str]] = defaultdict(set)
 
         def add_undirected(a: str, b: str) -> None:
@@ -810,7 +962,9 @@ class ClassGraph:
                 for j in range(i + 1, len(keys)):
                     add_undirected(keys[i], keys[j])
 
-        return dict(adj)
+        result = dict(adj)
+        self._adj_cache = (allowed_legs, result)
+        return result
 
     def _neighbor_bfs_keys(
         self,
@@ -846,12 +1000,12 @@ class ClassGraph:
 
         return collected
 
-    def _query_neighbor_context_string(self, seeds: set[str]) -> str:
+    def _query_neighbor_context_string(self, seeds: set[str], *, _precomputed_keys: list[str] | None = None) -> str:
         """在种子实例集合上按配置做图邻域扩展，序列化为补充检索片段。"""
         max_hops, max_extra, legs = get_query_neighbor_traversal_config()
         if max_hops <= 0 or max_extra <= 0:
             return ""
-        expanded_keys = self._neighbor_bfs_keys(seeds, max_hops, max_extra, legs)
+        expanded_keys = _precomputed_keys if _precomputed_keys is not None else self._neighbor_bfs_keys(seeds, max_hops, max_extra, legs)
         if not expanded_keys:
             return ""
 
@@ -898,6 +1052,7 @@ class ClassGraph:
                            top_k_instances=7,
                            ):
         self.selected_instance_keys.clear()
+        self._retrieval_bge_accum = []
         keyword_matched_str = self.find_keyword_relevant_instance_tags(query)
         sensed_classes = self._sense_classes_by_llm(query, llm, top_k_class)
         class_ids = [
@@ -905,27 +1060,33 @@ class ClassGraph:
             for c in sensed_classes.get("selected_classes", [])
             if c.get("class_id")
         ]
-        _, instances_in_classes_str = self._fetch_instances_by_tfidf(query, top_k_instances, threshold=0.5,
-                                                                     classes=sensed_classes)
+        _, instances_in_classes_str, retrieved_eids = self._fetch_instances_by_tfidf(
+            query, top_k_instances, threshold=0.5, classes=sensed_classes
+        )
         seeds = set(self.selected_instance_keys)
         expanded_keys = self._neighbor_expansion_key_list(seeds)
-        neighbor_str = self._query_neighbor_context_string(seeds)
+        neighbor_str = self._query_neighbor_context_string(seeds, _precomputed_keys=expanded_keys)
         combined_instances = "\n\n".join(
             s for s in (keyword_matched_str, instances_in_classes_str, neighbor_str) if (s or "").strip()
         )
+        max_ctx = get_query_retrieval_config().max_context_chars
+        combined_instances = _truncate_context(combined_instances, max_ctx)
         self.selected_instance_keys.clear()
+        self._adj_cache = None
         trace: dict[str, Any] = {
-            "schema_version": 1,
+            "schema_version": 2,
             "retrieval_method": "llm",
             "llm_selected_class_ids": class_ids,
+            "retrieved_entity_ids": retrieved_eids,
             "tfidf_hits": {
-                "count": len(seeds),
-                "entity_ids": self._instance_keys_to_entity_ids(seeds),
+                "count": len(retrieved_eids),
+                "entity_ids": retrieved_eids,
             },
             "neighbor_expansion": {
                 "count": len(expanded_keys),
                 "entity_ids": [self._instance_key_to_entity_id(k) for k in expanded_keys],
             },
+            "retrieval_fusion": {"stages": list(self._retrieval_bge_accum)},
             "prompt_chars": len(combined_instances),
         }
         return combined_instances, trace
@@ -937,6 +1098,7 @@ class ClassGraph:
                             top_k_instances=15,
                             ):
         self.selected_instance_keys.clear()
+        self._retrieval_bge_accum = []
 
         sensed_classes = self._sense_classes_by_tfidf(query, top_k_class, threshold=0.6, allow_below_threshold=True)
         tfidf_class_ids = [
@@ -944,37 +1106,50 @@ class ClassGraph:
             for c in sensed_classes.get("selected_classes", [])
             if c.get("class_id")
         ]
-        count_in_classes, instances_in_classes_str = self._fetch_instances_by_tfidf(
-            query, top_k_instances, threshold=0.5, classes=sensed_classes)
+        count_in_classes, instances_in_classes_str, e_class = self._fetch_instances_by_tfidf(
+            query, top_k_instances, threshold=0.5, classes=sensed_classes
+        )
         _logger.debug(f"第一阶段选择实例数量: {count_in_classes}")
 
-        count_global, instances_global_str = self._fetch_instances_by_tfidf(
-            query, top_k_instances, threshold=0.1)
+        count_global, instances_global_str, e_global = self._fetch_instances_by_tfidf(
+            query, top_k_instances, threshold=0.1
+        )
 
         seeds = set(self.selected_instance_keys)
         expanded_keys = self._neighbor_expansion_key_list(seeds)
-        neighbor_str = self._query_neighbor_context_string(seeds)
+        neighbor_str = self._query_neighbor_context_string(seeds, _precomputed_keys=expanded_keys)
         combined_instances = "\n\n".join(
             s for s in (instances_global_str, instances_in_classes_str, neighbor_str) if (s or "").strip()
         )
+        max_ctx = get_query_retrieval_config().max_context_chars
+        combined_instances = _truncate_context(combined_instances, max_ctx)
+        merged_eids: list[str] = []
+        seen_e: set[str] = set()
+        for e in e_global + e_class:
+            if e not in seen_e:
+                seen_e.add(e)
+                merged_eids.append(e)
         self.selected_instance_keys.clear()
+        self._adj_cache = None
         trace: dict[str, Any] = {
-            "schema_version": 1,
+            "schema_version": 2,
             "retrieval_method": "hash",
             "tfidf_class_ids_stage1": tfidf_class_ids,
+            "retrieved_entity_ids": merged_eids,
             "tfidf_hits": {
-                "count": len(seeds),
-                "entity_ids": self._instance_keys_to_entity_ids(seeds),
+                "count": len(merged_eids),
+                "entity_ids": merged_eids,
             },
             "neighbor_expansion": {
                 "count": len(expanded_keys),
                 "entity_ids": [self._instance_key_to_entity_id(k) for k in expanded_keys],
             },
+            "retrieval_fusion": {"stages": list(self._retrieval_bge_accum)},
             "prompt_chars": len(combined_instances),
         }
         return combined_instances, trace
 
-    def _sense_classes_by_llm(self, query, llm, top_k_class):
+    def _sense_classes_by_llm(self, query, llm, top_k_class, *, _max_retries: int = 2):
         """
         查询最相关的多个类
 
@@ -992,17 +1167,21 @@ class ClassGraph:
             top_k=top_k_class
         )
 
-        #_logger.debug(f"QUERY_CLASSES_PROMPT: {query_classes_prompt}")
-        response = llm.invoke(query_classes_prompt)
-        content = getattr(response, "content", None) or str(response)
-        _logger.debug(f"QUERY_CLASSES_RESPONSE: %s", content)
+        for attempt in range(1, _max_retries + 1):
+            #_logger.debug(f"QUERY_CLASSES_PROMPT: {query_classes_prompt}")
+            with llm_call_scope("query.class_pick"):
+                response = llm.invoke(query_classes_prompt)
+            content = getattr(response, "content", None) or str(response)
+            _logger.debug(f"QUERY_CLASSES_RESPONSE: %s", content)
 
-        query_results = parse_llm_json_object(content)
-        if query_results is not None:
-            if "selected_classes" not in query_results:
-                query_results["selected_classes"] = []
-            return query_results
-        _logger.error("解析类查询结果失败: 非 JSON 或无法解析为对象")
+            query_results = parse_llm_json_object(content)
+            if query_results is not None:
+                if "selected_classes" not in query_results:
+                    query_results["selected_classes"] = []
+                return query_results
+            _logger.warning("解析类查询结果失败 (尝试 %d/%d): 非 JSON 或无法解析为对象", attempt, _max_retries)
+
+        _logger.error("解析类查询结果失败: 经过 %d 次尝试仍无法解析", _max_retries)
         return {"error": "解析类查询结果失败", "selected_classes": []}
 
     def _sense_classes_by_tfidf(self, query, top_k_class, threshold,allow_below_threshold=True):
@@ -1167,7 +1346,52 @@ class ClassGraph:
 
         return {"selected_classes": selected_classes_info}
 
+    def _maybe_fuse_instance_scores_with_bge(
+        self,
+        query: str,
+        all_instances: list,
+        instance_max_scores: dict[int, float],
+    ) -> tuple[dict[int, float], dict[str, Any]]:
+        from src.retrieval.bge_query import minmax_01, query_instance_cosine_similarities
 
+        cfg = get_query_retrieval_config()
+        aux: dict[str, Any] = {
+            "bge_applied": False,
+            "bge_lambda": cfg.bge_lambda,
+            "bge_ms": 0.0,
+            "bge_pool_size": 0,
+        }
+        if cfg.bge_lambda <= 0 or not instance_max_scores:
+            return instance_max_scores, aux
+        path = get_embedding_model_path()
+        if not os.path.isdir(path):
+            _logger.debug("query BGE: 嵌入模型目录不存在，跳过融合")
+            return instance_max_scores, aux
+        idxs = sorted(instance_max_scores.keys(), key=lambda i: instance_max_scores[i], reverse=True)
+        cap = min(cfg.bge_max_encode_instances, len(idxs))
+        pool_list = idxs[:cap]
+        texts: list[str] = []
+        for inst_idx in pool_list:
+            inst = all_instances[inst_idx]
+            parts = [tx for _ty, tx in build_instance_fragments(inst) if (tx or "").strip()]
+            texts.append("\n".join(parts) if parts else " ")
+        try:
+            bge_raw, ms = query_instance_cosine_similarities(query, texts, path)
+            aux["bge_ms"] = round(ms, 3)
+            aux["bge_applied"] = True
+            aux["bge_pool_size"] = len(pool_list)
+            tfidf_pool = [instance_max_scores[i] for i in pool_list]
+            t01 = minmax_01(tfidf_pool)
+            b01 = minmax_01(bge_raw)
+            lam = cfg.bge_lambda
+            fused_pool = [(1.0 - lam) * t01[j] + lam * b01[j] for j in range(len(pool_list))]
+            new_scores = dict(instance_max_scores)
+            for j, inst_idx in enumerate(pool_list):
+                new_scores[inst_idx] = fused_pool[j]
+            return new_scores, aux
+        except Exception as e:
+            _logger.warning("query BGE 融合失败，使用纯 TF-IDF: %s", e)
+            return instance_max_scores, aux
 
     def _fetch_instances_by_tfidf(self, query, top_k_instances, threshold, classes=None) :
         """
@@ -1319,7 +1543,7 @@ class ClassGraph:
 
         if not all_instances or not instance_documents:
             _logger.warning("未找到任何实例或实例片段")
-            return 0, ""
+            return 0, "", []
 
         _logger.debug(f"TF-IDF实例检索: 总共收集到 {len(all_instances)} 个实例，{len(instance_documents)} 个片段")
 
@@ -1347,7 +1571,12 @@ class ClassGraph:
 
         if not instance_max_scores:
             _logger.warning("没有找到任何匹配的实例片段")
-            return 0, ""
+            return 0, "", []
+
+        instance_max_scores, bge_aux = self._maybe_fuse_instance_scores_with_bge(
+            query, all_instances, instance_max_scores
+        )
+        self._retrieval_bge_accum.append(bge_aux)
 
         # 4. 将实例按最高相似度排序
         instance_scores = list(instance_max_scores.items())
@@ -1364,7 +1593,7 @@ class ClassGraph:
 
         # 6. 根据新逻辑选择实例
         if top_k_instances <= 0:
-            return 0, ""
+            return 0, "", []
 
         above_count = len(above_threshold)
         selected_instance_scores = []
@@ -1442,7 +1671,13 @@ class ClassGraph:
                              f"类={class_info.get('class_id', 'unknown')}, "
                              f"匹配片段类型={best_fragment.get('fragment_type', 'unknown')}")
 
-        return len(cleaned_instances), serialize_instance(cleaned_instances)
+        ordered_entity_ids: list[str] = []
+        for instance_idx, _score in selected_instance_scores:
+            ik = instance_keys_map.get(instance_idx)
+            if ik:
+                ordered_entity_ids.append(self._instance_key_to_entity_id(ik))
+
+        return len(cleaned_instances), serialize_instance(cleaned_instances), ordered_entity_ids
 
     def process_kw(self, filepath=None):
         tags = []
@@ -1576,7 +1811,8 @@ class ClassGraph:
             "TAGS": all_instance_info
         })
         _logger.debug(f"keywords_prompt: %s", find_keywords_prompt)
-        response = self._llm.invoke(find_keywords_prompt)
+        with llm_call_scope("query.keyword_tags"):
+            response = self._llm.invoke(find_keywords_prompt)
         kw_content = getattr(response, "content", None) or str(response)
         _logger.debug(f"keywords_prompt response: %s", kw_content)
         parsed_kw = parse_llm_json_value(kw_content)

@@ -1,49 +1,34 @@
-# Mosaic 示例数据与测试
+# Example
 
-本目录提供最小示例数据与可执行脚本，用于验证 mosaic 构图与查询流程。
+Minimal example data and scripts for verifying the MOSAIC graph construction and query pipeline.
 
-## 文件说明
+## Files
 
-- **conv_small.json**：最小对话数据（单 session、5 条消息），格式与 `locomo_conv*.json` 一致。
-- **qa_small.json**：2 道示例 QA，用于查询测试。
-- **build_minimal_graph.py**：仅用 Python 标准库 + `networkx` 构建最小图与 tags，**不依赖 mosaic 或 LLM**。
-- **run_example.py**：加载示例图与 QA，执行检索（可选 LLM 作答与评判）。
+- **conv_small.json** — Minimal conversation data (single session, 5 messages), same format as `locomo_conv*.json`.
+- **qa_small.json** — 2 example QA pairs for query testing.
+- **run_example.py** — Load a pre-built example graph and QA, run retrieval (optionally with LLM answering and judging).
 
-## 运行方式（在项目根目录 LongtermMemory 下）
+## Quick Start (from project root `LongtermMemory/`)
 
-### 1. 构建最小图与 tags（无需 API）
-
-```bash
-# 仅需 networkx
-pip install networkx
-python example/build_minimal_graph.py
-```
-
-会在 `example/output/` 下生成 `graph_small.pkl` 和 `tags_small.json`。
-
-### 2. 运行示例（需安装 mosaic 依赖）
+### Run example (requires mosaic dependencies)
 
 ```bash
-# 安装 mosaic 依赖（见 mosaic/requirements.txt）
+# Install mosaic dependencies
 pip install -r mosaic/requirements.txt
 
-# 仅测试加载与 TF-IDF 检索（不调用 LLM）
+# Test loading and TF-IDF retrieval only (no LLM calls)
 PYTHONPATH=mosaic python example/run_example.py --no-llm
 
-# 完整 QA（需在 mosaic/config/config.cfg 中配置 API key）
+# Full QA with LLM (requires API key in mosaic/config/config.cfg)
 PYTHONPATH=mosaic python example/run_example.py --max-questions 2
 ```
 
-配置 API：将 `mosaic/config/config.cfg` 中的 `ali_api_key` 和 `ali_base_url` 设为有效值，或通过环境变量 `MOSAIC_CONFIG_PATH` 指定配置文件路径。
+### API Configuration
 
-### 3. 在 mosaic 内运行（以 mosaic 为当前目录）
+Set `ali_api_key` and `ali_base_url` in `mosaic/config/config.cfg`, or use the `MOSAIC_CONFIG_PATH` environment variable to specify a custom config file.
 
-```bash
-cd mosaic
-python -m src.query   # 或先配置 batch 中的路径后执行
-```
+## Notes
 
-## 说明
-
-- 构图完整流程（从 `conv_small.json` 到图）需要 LLM，见 `mosaic/src/save.py`；本示例仅提供预构建的最小图以便快速测试查询。
-- 若本地缺少模型或 API，使用 `--no-llm` 可验证图加载与检索链路是否正常。
+- The full graph construction pipeline (from `conv_small.json` to graph) requires LLM; see `mosaic/src/save.py`.
+- The pre-built graph in `output/` allows quick testing of the query pipeline.
+- Use `--no-llm` to verify graph loading and retrieval without API access.

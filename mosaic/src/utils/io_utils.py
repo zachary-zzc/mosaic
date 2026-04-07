@@ -11,7 +11,8 @@ from typing import Any
 def parse_llm_json_object(text: str | None) -> dict[str, Any] | None:
     """
     从 LLM 回复中解析单个 JSON 对象。会去除 ```json 围栏、截取首尾花括号，
-    并对常见错误做修复（如 JSON 中非法的 \\' 转义），再 json.loads。
+    并对常见错误做修复（如 JSON 中非法的 \\' 转义、尾随逗号、单引号键值、
+    控制字符、截断 JSON 等），再 json.loads。
 
     解析失败返回 None；成功则返回 dict（不要求一定含特定键）。
     """
@@ -63,7 +64,134 @@ def parse_llm_json_object(text: str | None) -> dict[str, Any] | None:
     if out is not None:
         return out
 
+    # 控制字符清理（LLM 可能输出 \x00-\x1f 中非法字符）
+    repaired4 = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", "", raw)
+    out = _loads(repaired4)
+    if out is not None:
+        return out
+
+    # 字符串值内的非法换行（不在引号外的 \n）
+    repaired5 = _fix_unescaped_newlines(raw)
+    out = _loads(repaired5)
+    if out is not None:
+        return out
+
+    # 单引号 → 双引号（简单情况：无嵌套引号的键值）
+    repaired6 = _single_to_double_quotes(raw)
+    out = _loads(repaired6)
+    if out is not None:
+        return out
+
+    # 截断 JSON 修复：尝试关闭未闭合的引号和括号
+    repaired7 = _fix_truncated_json(raw)
+    if repaired7 != raw:
+        out = _loads(repaired7)
+        if out is not None:
+            return out
+
+    # 组合修复：尾随逗号 + 控制字符 + 截断
+    combined = re.sub(r",\s*([}\]])", r"\1", repaired4)
+    combined = _fix_truncated_json(combined)
+    out = _loads(combined)
+    if out is not None:
+        return out
+
     return None
+
+
+def _fix_unescaped_newlines(s: str) -> str:
+    """修复 JSON 字符串值内的裸换行符。"""
+    result = []
+    in_string = False
+    escape = False
+    for ch in s:
+        if escape:
+            result.append(ch)
+            escape = False
+            continue
+        if ch == '\\':
+            escape = True
+            result.append(ch)
+            continue
+        if ch == '"':
+            in_string = not in_string
+            result.append(ch)
+            continue
+        if in_string and ch == '\n':
+            result.append('\\n')
+            continue
+        if in_string and ch == '\r':
+            result.append('\\r')
+            continue
+        result.append(ch)
+    return ''.join(result)
+
+
+def _single_to_double_quotes(s: str) -> str:
+    """将单引号风格的 JSON 转为双引号（仅处理键和简单字符串值）。"""
+    # 仅在整体看起来像单引号 JSON 时尝试
+    if "'" not in s or s.count('"') > s.count("'"):
+        return s
+    result = []
+    in_single = False
+    in_double = False
+    escape = False
+    for ch in s:
+        if escape:
+            result.append(ch)
+            escape = False
+            continue
+        if ch == '\\':
+            escape = True
+            result.append(ch)
+            continue
+        if ch == '"' and not in_single:
+            in_double = not in_double
+            result.append(ch)
+            continue
+        if ch == "'" and not in_double:
+            in_single = not in_single
+            result.append('"')
+            continue
+        result.append(ch)
+    return ''.join(result)
+
+
+def _fix_truncated_json(s: str) -> str:
+    """尝试关闭被截断的 JSON（未闭合的引号、数组、对象）。"""
+    s = s.rstrip()
+    # 移除末尾不完整的键值对（如 "key": 无值、"key 无冒号）
+    s = re.sub(r',\s*"[^"]*"\s*:\s*$', '', s)
+    s = re.sub(r',\s*"[^"]*"\s*$', '', s)
+    # 计算未闭合的括号
+    stack: list[str] = []
+    in_str = False
+    esc = False
+    for ch in s:
+        if esc:
+            esc = False
+            continue
+        if ch == '\\':
+            esc = True
+            continue
+        if ch == '"':
+            in_str = not in_str
+            continue
+        if in_str:
+            continue
+        if ch in ('{', '['):
+            stack.append(ch)
+        elif ch == '}' and stack and stack[-1] == '{':
+            stack.pop()
+        elif ch == ']' and stack and stack[-1] == '[':
+            stack.pop()
+    # 如果有未闭合的字符串引号，先关闭
+    if in_str:
+        s += '"'
+    # 关闭未闭合的括号（按逆序）
+    for bracket in reversed(stack):
+        s += '}' if bracket == '{' else ']'
+    return s
 
 
 def parse_llm_json_value(text: str | None) -> Any | None:
@@ -123,6 +251,43 @@ def parse_llm_json_value(text: str | None) -> Any | None:
         return out
 
     return None
+
+
+def llm_response_text(message: Any) -> str:
+    """
+    从 LangChain ChatMessage（或类似对象）提取用于 JSON 解析的字符串。
+    兼容 content 为 str / 多段列表、以及部分适配器写在 additional_kwargs 里的正文。
+    """
+    if message is None:
+        return ""
+    content = getattr(message, "content", None)
+    if isinstance(content, str):
+        s = content.strip()
+        if s:
+            return s
+    elif isinstance(content, list):
+        parts: list[str] = []
+        for block in content:
+            if isinstance(block, str):
+                parts.append(block)
+            elif isinstance(block, dict):
+                if block.get("type") == "text" and isinstance(block.get("text"), str):
+                    parts.append(block["text"])
+                elif isinstance(block.get("text"), str):
+                    parts.append(block["text"])
+        joined = "".join(parts).strip()
+        if joined:
+            return joined
+
+    ak = getattr(message, "additional_kwargs", None) or {}
+    if isinstance(ak, dict):
+        for key in ("content", "text", "reasoning_content"):
+            v = ak.get(key)
+            if isinstance(v, str) and v.strip():
+                return v.strip()
+
+    fallback = str(message).strip()
+    return fallback
 
 
 def read_json(path: str | Path) -> Any:

@@ -1,0 +1,20 @@
+{
+  "_comment": "LoCoMo experiment session registry. Add new conversations as they become available.",
+  "sessions": [
+    {
+      "conv_id": "conv0",
+      "conv_json": "locomo_conv0.json",
+      "qa_json": "qa_0.json",
+      "num_messages": 419
+    },
+    {
+      "conv_id": "conv7",
+      "conv_json": "locomo_conv7.json",
+      "qa_json": "qa_7.json",
+      "num_messages": 681
+    }
+  ],
+  "strategies": ["hybrid", "hash_only"],
+  "query_method": "hash",
+  "base_dir": "dataset/locomo"
+}

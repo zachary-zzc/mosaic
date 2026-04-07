@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import configparser
 import os
+from dataclasses import dataclass
 from pathlib import Path
 
 
@@ -203,3 +204,139 @@ def get_embedding_model_path() -> str:
     else:
         rel = "embedding_models/all-MiniLM-L6-v2"
     return str(resolve_under_mosaic(rel))
+
+
+@dataclass(frozen=True)
+class EdgeConstructionConfig:
+    """
+    构图结束后的双图增强（docs/optimization.md §5 B-2、§4）。
+
+    环境变量覆盖（可选）：
+    MOSAIC_EDGE_SEMANTIC_A (0/1), MOSAIC_EDGE_SEMANTIC_MIN_SIM, MOSAIC_EDGE_SEMANTIC_MAX_PAIRS,
+    MOSAIC_EDGE_PREREQ_LLM (0/1), MOSAIC_EDGE_PREREQ_MAX_PAIRS, MOSAIC_EDGE_PREREQ_BATCH
+    """
+
+    semantic_a_enabled: bool
+    semantic_min_similarity: float
+    semantic_max_pairs: int
+    semantic_min_text_len: int
+    prerequisite_llm_enabled: bool
+    prerequisite_min_similarity: float
+    prerequisite_max_pairs: int
+    prerequisite_batch_size: int
+
+    def enabled_summary(self) -> str:
+        parts: list[str] = []
+        if self.semantic_a_enabled:
+            parts.append("semantic_bge")
+        if self.prerequisite_llm_enabled:
+            parts.append("prerequisite_llm")
+        return ",".join(parts) or "none"
+
+
+def _cfg_bool(val: str, default: bool) -> bool:
+    s = (val or "").strip().lower()
+    if s in ("1", "true", "yes", "on"):
+        return True
+    if s in ("0", "false", "no", "off"):
+        return False
+    return default
+
+
+def get_edge_construction_config() -> EdgeConstructionConfig:
+    cp = load_api_config()
+    d_sem_a, d_sem_sim, d_sem_max, d_sem_len = True, 0.55, 2000, 24
+    d_pre_llm, d_pre_sim, d_pre_max, d_pre_batch = False, 0.22, 64, 6
+    if cp.has_section("EDGE"):
+        sec = cp["EDGE"]
+        semantic_a = _cfg_bool(sec.get("semantic_a_enabled", "true"), d_sem_a)
+        sem_sim = float(sec.get("semantic_min_similarity", str(d_sem_sim)))
+        sem_max = int(sec.get("semantic_max_pairs", str(d_sem_max)))
+        sem_len = int(sec.get("semantic_min_text_len", str(d_sem_len)))
+        pre_llm = _cfg_bool(sec.get("prerequisite_llm_enabled", "false"), d_pre_llm)
+        pre_sim = float(sec.get("prerequisite_min_similarity", str(d_pre_sim)))
+        pre_max = int(sec.get("prerequisite_max_pairs", str(d_pre_max)))
+        pre_batch = int(sec.get("prerequisite_batch_size", str(d_pre_batch)))
+    else:
+        semantic_a, sem_sim, sem_max, sem_len = d_sem_a, d_sem_sim, d_sem_max, d_sem_len
+        pre_llm, pre_sim, pre_max, pre_batch = d_pre_llm, d_pre_sim, d_pre_max, d_pre_batch
+
+    if os.environ.get("MOSAIC_EDGE_SEMANTIC_A", "").strip():
+        semantic_a = _cfg_bool(os.environ["MOSAIC_EDGE_SEMANTIC_A"], semantic_a)
+    if os.environ.get("MOSAIC_EDGE_SEMANTIC_MIN_SIM", "").strip():
+        sem_sim = float(os.environ["MOSAIC_EDGE_SEMANTIC_MIN_SIM"])
+    if os.environ.get("MOSAIC_EDGE_SEMANTIC_MAX_PAIRS", "").strip():
+        sem_max = int(os.environ["MOSAIC_EDGE_SEMANTIC_MAX_PAIRS"])
+    if os.environ.get("MOSAIC_EDGE_PREREQ_LLM", "").strip():
+        pre_llm = _cfg_bool(os.environ["MOSAIC_EDGE_PREREQ_LLM"], pre_llm)
+    if os.environ.get("MOSAIC_EDGE_PREREQ_MAX_PAIRS", "").strip():
+        pre_max = int(os.environ["MOSAIC_EDGE_PREREQ_MAX_PAIRS"])
+    if os.environ.get("MOSAIC_EDGE_PREREQ_BATCH", "").strip():
+        pre_batch = int(os.environ["MOSAIC_EDGE_PREREQ_BATCH"])
+
+    return EdgeConstructionConfig(
+        semantic_a_enabled=semantic_a,
+        semantic_min_similarity=sem_sim,
+        semantic_max_pairs=max(0, sem_max),
+        semantic_min_text_len=max(0, sem_len),
+        prerequisite_llm_enabled=pre_llm,
+        prerequisite_min_similarity=pre_sim,
+        prerequisite_max_pairs=max(0, pre_max),
+        prerequisite_batch_size=max(1, pre_batch),
+    )
+
+
+@dataclass(frozen=True)
+class QueryRetrievalConfig:
+    """轨 D：查询时 TF-IDF + BGE 融合（docs/optimization.md §7）。"""
+
+    bge_lambda: float
+    bge_max_encode_instances: int
+    max_context_chars: int
+
+
+def get_query_retrieval_config() -> QueryRetrievalConfig:
+    lam, mx, mcc = 0.0, 600, 0
+    cp = load_api_config()
+    if cp.has_section("QUERY"):
+        sec = cp["QUERY"]
+        lam = float(sec.get("bge_lambda", "0"))
+        mx = int(sec.get("bge_max_encode_instances", "600"))
+        mcc = int(sec.get("max_context_chars", "0"))
+    el = os.environ.get("MOSAIC_QUERY_BGE_LAMBDA", "").strip()
+    if el:
+        lam = float(el)
+    em = os.environ.get("MOSAIC_QUERY_BGE_MAX_ENCODE", "").strip()
+    if em.isdigit():
+        mx = int(em)
+    ec = os.environ.get("MOSAIC_QUERY_MAX_CONTEXT_CHARS", "").strip()
+    if ec.isdigit():
+        mcc = int(ec)
+    lam = max(0.0, min(1.0, lam))
+    mx = max(32, min(50000, mx))
+    mcc = max(0, mcc)
+    return QueryRetrievalConfig(bge_lambda=lam, bge_max_encode_instances=mx, max_context_chars=mcc)
+
+
+def get_control_profile() -> str:
+    """轨 C：``static`` | ``evolving`` | ``memory_only``（占位，供 Runner 读取）。"""
+    env = os.environ.get("MOSAIC_CONTROL_PROFILE", "").strip().lower()
+    if env in ("static", "evolving", "memory_only"):
+        return env
+    cp = load_api_config()
+    if cp.has_section("CONTROL"):
+        v = cp.get("CONTROL", "profile", fallback="static").strip().lower()
+        if v in ("static", "evolving", "memory_only"):
+            return v
+    return "static"
+
+
+def get_ncs_trace_path() -> str:
+    """NCS JSONL 路径：``[NCS] trace_jsonl`` 或 ``MOSAIC_NCS_TRACE_JSONL``。"""
+    p = os.environ.get("MOSAIC_NCS_TRACE_JSONL", "").strip()
+    if p:
+        return p
+    cp = load_api_config()
+    if cp.has_section("NCS"):
+        return cp.get("NCS", "trace_jsonl", fallback="").strip()
+    return ""

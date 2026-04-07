@@ -1,32 +1,118 @@
+import time
 from string import Template
-from typing import List, Dict, Any, TYPE_CHECKING
+from typing import List, Dict, Any, Optional, TYPE_CHECKING
 from src.assist import fetch_default_llm_model
 from src.prompts_en import PROMPT_CREATE_INSTANCE, PROMPT_UPDATE_INSTANCE
 #from src.prompts import PROMPT_CREATE_INSTANCE,PROMPT_UPDATE_INSTANCE
 
 from src.logger import setup_logger
-from src.utils.io_utils import parse_llm_json_value
+from src.utils.io_utils import llm_response_text, parse_llm_json_value
 
 _logger = setup_logger("instance cudr")
 _llm = fetch_default_llm_model()
+
+
+def merge_canonical_message_labels(instance: Dict[str, Any], messages: List) -> None:
+    """
+    将 ``messages`` 中的规范 ``label``（如 conv_message_splitter 的全局整数）并入实例的
+    ``message_labels``。LLM 返回的实例常使用自造标签名，导致 update_class_relationships
+    无法按对话标签共现建边；合并后可与本批 ``data`` 中的 label 对齐。
+    """
+    if not isinstance(instance, dict):
+        return
+    extra: List[Any] = []
+    for m in messages or []:
+        if isinstance(m, dict) and m.get("label") is not None:
+            extra.append(m["label"])
+    if not extra:
+        return
+    cur = list(instance.get("message_labels") or [])
+    norm = {str(x) for x in cur}
+    for lab in extra:
+        s = str(lab)
+        if s not in norm:
+            norm.add(s)
+            cur.append(lab)
+    instance["message_labels"] = cur
 
 # DashScope 兼容模式 JSON Mode：https://help.aliyun.com/zh/model-studio/json-mode
 _DASHSCOPE_JSON_OBJECT = {"type": "json_object"}
 
 
+def _format_messages_for_prompt(messages: List[Any]) -> str:
+    """将消息列表格式化为 prompt 行（兼容 dict 含 message / 纯 str）。"""
+    lines: List[str] = []
+    for msg in messages or []:
+        if isinstance(msg, dict):
+            lines.append(f"- {msg.get('message', msg)}")
+        else:
+            lines.append(f"- {msg}")
+    return "\n".join(lines)
+
+
 def _invoke_json_object(prompt: str):
     """百炼 json_object 要求 messages 含「json」字样，且根节点须为 JSON 对象。"""
-    return _llm.invoke(prompt, response_format=_DASHSCOPE_JSON_OBJECT)
+    from src.llm.telemetry import llm_call_scope
+
+    with llm_call_scope("build.instance_json_object"):
+        return _llm.invoke(prompt, response_format=_DASHSCOPE_JSON_OBJECT)
 
 
 def _payload_from_json_object(content: str) -> Any:
     """解析 json_object 模式返回的文本；兼容围栏与非严格 JSON（与 mosaic 其它 LLM 解析一致）。"""
-    if not (content or "").strip():
+    raw = (content or "").strip()
+    if not raw:
         raise ValueError("LLM 返回空内容，无法解析 JSON")
-    parsed = parse_llm_json_value(content)
+    parsed = parse_llm_json_value(raw)
     if parsed is not None:
         return parsed
-    raise ValueError("LLM 返回无法解析为 JSON 对象或数组")
+    preview = raw[:240] + ("…" if len(raw) > 240 else "")
+    raise ValueError(f"LLM 返回无法解析为 JSON 对象或数组，正文预览: {preview!r}")
+
+
+# 首次请求 + 至少 1 次重试（共 2 轮）
+_JSON_OBJECT_RETRIES = 2
+_JSON_OBJECT_RETRY_DELAY_SEC = 1.5
+
+
+def _invoke_resolve_json_payload(prompt: str) -> tuple[Optional[Any], str]:
+    """
+    调用 json_object 并解析；带重试。
+
+    Returns:
+        (payload, status): status 为 "ok" 时 payload 为解析结果；
+        "empty" 表示各次提取正文均为空（视为无输出，由调用方跳过）；
+        "bad_json" 表示出现过非空正文但始终无法解析（复杂/损坏 JSON，可走 hash 降级）。
+    """
+    saw_nonempty = False
+    for attempt in range(1, _JSON_OBJECT_RETRIES + 1):
+        response = _invoke_json_object(prompt)
+        text = (llm_response_text(response) or "").strip()
+        if not text:
+            _logger.warning(
+                "json_object 第 %d/%d 次: 提取正文为空",
+                attempt,
+                _JSON_OBJECT_RETRIES,
+            )
+            if attempt < _JSON_OBJECT_RETRIES:
+                time.sleep(_JSON_OBJECT_RETRY_DELAY_SEC * attempt)
+            continue
+        saw_nonempty = True
+        try:
+            return _payload_from_json_object(text), "ok"
+        except ValueError as e:
+            _logger.warning(
+                "json_object 第 %d/%d 次解析失败: %s；正文长度=%d",
+                attempt,
+                _JSON_OBJECT_RETRIES,
+                e,
+                len(text),
+            )
+            if attempt < _JSON_OBJECT_RETRIES:
+                time.sleep(_JSON_OBJECT_RETRY_DELAY_SEC * attempt)
+    if not saw_nonempty:
+        return None, "empty"
+    return None, "bad_json"
 
 
 def _normalize_instances_list(parsed: Any) -> List[Dict[str, Any]]:
@@ -34,6 +120,8 @@ def _normalize_instances_list(parsed: Any) -> List[Dict[str, Any]]:
     if isinstance(parsed, list):
         return [x for x in parsed if isinstance(x, dict)]
     if isinstance(parsed, dict):
+        if len(parsed) == 0:
+            return []
         if "instances" in parsed and isinstance(parsed["instances"], list):
             return [x for x in parsed["instances"] if isinstance(x, dict)]
         if "instance_name" in parsed or "attributes" in parsed:
@@ -80,14 +168,20 @@ class Instance:
 def update_data_from_messages(instance,messages: List[str]):
     # update instance data according to messages
     align_update_prompt = Template(PROMPT_UPDATE_INSTANCE).substitute(
-        update_message="\n".join([f"- {msg}" for msg in messages]),
+        update_message=_format_messages_for_prompt(messages),
         instance=instance
     )
 
     _logger.debug("ALIGN_UPDATE_PROMPT: %s", align_update_prompt)
-    response = _invoke_json_object(align_update_prompt)
-    _logger.debug("ALIGN_UPDATE_RESPONSE: %s", response.content)
-    updated_instances = _payload_from_json_object(response.content)
+    updated_instances, status = _invoke_resolve_json_payload(align_update_prompt)
+    if status == "empty":
+        _logger.warning("实例更新 LLM 返回空，跳过更新（保留原实例结构）")
+        return dict(instance)
+    if status == "bad_json":
+        _logger.warning("实例更新 LLM JSON 无法解析，降级为 hash 合并消息")
+        return update_data_from_messages_hash(instance, messages)
+    assert updated_instances is not None
+    _logger.debug("ALIGN_UPDATE_RESPONSE parsed keys: %s", list(updated_instances) if isinstance(updated_instances, dict) else type(updated_instances))
     if not isinstance(updated_instances, dict):
         raise ValueError("更新实例期望 JSON 对象（单条实例），得到: %s" % type(updated_instances).__name__)
 
@@ -143,17 +237,26 @@ def create_instances_from_messages(messages: List[str],
 
     align_add_prompt = Template(PROMPT_CREATE_INSTANCE).substitute(
         class_node=class_info,
-        related_messages="\n".join([f"- {msg}" for msg in messages]),
-        context_messages="\n".join([f"- {msg}" for msg in context_messages])
+        related_messages=_format_messages_for_prompt(messages),
+        context_messages=_format_messages_for_prompt(context_messages),
     )
 
     _logger.debug("ALIGN_ADD_PROMPT: %s", align_add_prompt)
-    response = _invoke_json_object(align_add_prompt)
-    _logger.debug("ALIGN_ADD_RESPONSE: %s", response.content)
+    parsed, status = _invoke_resolve_json_payload(align_add_prompt)
+    if status == "empty":
+        _logger.warning("创建实例 LLM 返回空，跳过（不新增实例）")
+        return []
+    if status == "bad_json":
+        _logger.warning("创建实例 LLM JSON 无法解析，降级为 hash 实例")
+        return create_instances_from_messages_hash(messages, context_messages, class_node)
 
-    parsed = _payload_from_json_object(response.content)
-    instances_data = _normalize_instances_list(parsed)
-    return instances_data
+    assert parsed is not None
+    _logger.debug("ALIGN_ADD_RESPONSE normalized from type=%s", type(parsed).__name__)
+    try:
+        return _normalize_instances_list(parsed)
+    except ValueError as e:
+        _logger.warning("LLM 返回 JSON 结构无法归一化为实例列表，本批降级 hash: %s", e)
+        return create_instances_from_messages_hash(messages, context_messages, class_node)
 
 
 

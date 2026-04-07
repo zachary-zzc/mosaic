@@ -1,14 +1,11 @@
 """
-在示例数据上运行 mosaic 构图与查询流程（可选 LLM）。
+Run mosaic graph construction and query on example data.
 
-用法（在 LongtermMemory 根目录）:
-  # 1. 先构建最小图与 tags（无需 API）
-  PYTHONPATH=mosaic python example/build_minimal_graph.py
-
-  # 2. 运行查询示例（需要配置 config/config.cfg 中的 API key 才会调用 LLM）
+Usage (from project root LongtermMemory/):
+  # 1. Run query example (needs mosaic dependencies and API config)
   PYTHONPATH=mosaic python example/run_example.py
 
-  # 3. 仅测试加载与检索，不调用 LLM（--no-llm 时用占位答案，便于无 API 环境测试）
+  # 2. Test loading and retrieval only, no LLM calls
   PYTHONPATH=mosaic python example/run_example.py --no-llm
 """
 from __future__ import annotations
@@ -24,7 +21,7 @@ MOSAIC = os.path.join(ROOT, "mosaic")
 if MOSAIC not in sys.path:
     sys.path.insert(0, MOSAIC)
 
-# 可选：不加载 embedding/KeyBERT，减少本地依赖
+# Optional: avoid loading embedding/KeyBERT models to reduce local dependencies
 os.chdir(MOSAIC)
 
 
@@ -40,10 +37,10 @@ def main():
     qa_path = os.path.join(EXAMPLE, "qa_small.json")
 
     if not os.path.isfile(graph_path) or not os.path.isfile(tags_path):
-        print("请先运行: PYTHONPATH=mosaic python example/build_minimal_graph.py")
+        print("Graph or tags not found. Ensure example/output/ contains graph_small.pkl and tags_small.json.")
         sys.exit(1)
     if not os.path.isfile(qa_path):
-        print(f"未找到 {qa_path}")
+        print(f"QA file not found: {qa_path}")
         sys.exit(1)
 
     from src.data.graph import ClassGraph
@@ -56,16 +53,16 @@ def main():
     questions = read_to_file_json(qa_path)
     questions = questions[: args.max_questions]
 
-    print("示例问题与检索结果（前几条）:\n")
+    print("Example questions and retrieval results:\n")
     for i, qa in enumerate(questions):
         q = qa.get("question", "")
         serialized = memory._search_by_sub_hash(q, top_k_class=5, top_k_instances=5)
         snippet = (serialized[:400] + "...") if len(serialized) > 400 else serialized
         print(f"Q{i+1}: {q}")
-        print(f"检索片段:\n{snippet}\n")
+        print(f"Retrieved:\n{snippet}\n")
 
     if args.no_llm:
-        print("(--no-llm: 已跳过 LLM 调用，仅测试加载与检索。)")
+        print("(--no-llm: skipped LLM calls, tested loading and retrieval only.)")
         return
 
     from src.query import query, process_single_qa
@@ -84,7 +81,7 @@ def main():
         max_questions=args.max_questions,
     )
     if result:
-        print("\n完整结果已写入:", summary_path)
+        print("\nFull results written to:", summary_path)
 
 
 if __name__ == "__main__":
