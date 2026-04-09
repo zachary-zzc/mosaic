@@ -16,11 +16,10 @@ DATASET_LOCOMO_DIR = os.path.join(PROJECT_ROOT, "dataset", "locomo")
 
 
 def setup_mosaic_path():
-    """Add mosaic and mosaic/src to sys.path and chdir to mosaic/src."""
+    """Add mosaic and mosaic/src to sys.path."""
     for p in (MOSAIC_DIR, MOSAIC_SRC):
         if p not in sys.path:
             sys.path.insert(0, p)
-    os.chdir(MOSAIC_SRC)
 
 
 def load_json_safe(path, default=None):
@@ -82,8 +81,8 @@ def build_locomo_graph_hash(conv_path, out_dir, conv_name=None):
         data,
         conv_name=name,
         graph_save_dir=out_dir,
-        graph_output_path=graph_path,
-        tag_output_path=tags_path,
+        final_graph_path=graph_path,
+        final_tags_path=tags_path,
     )
     return graph_path, tags_path
 

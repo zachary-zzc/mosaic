@@ -1,5 +1,6 @@
 import json
 import os
+from glob import glob
 
 try:
     from tqdm import tqdm
@@ -84,19 +85,10 @@ def process_single_conv(file_path):
 def process_all_convs():
     """处理目录下所有符合条件的conv文件"""
     # 定义要处理的文件模式
-    file_pattern = "./locomo results/conv/locomo_conv*.json"
-    conv_files = [
-        "D:/model/conv/GraphConv/oop_graph/src/locomo results/conv/locomo_conv0.json",
-        "D:/model/conv/GraphConv/oop_graph/src/locomo results/conv/locomo_conv1.json",
-        "D:/model/conv/GraphConv/oop_graph/src/locomo results/conv/locomo_conv2.json",
-        "D:/model/conv/GraphConv/oop_graph/src/locomo results/conv/locomo_conv3.json",
-        "D:/model/conv/GraphConv/oop_graph/src/locomo results/conv/locomo_conv4.json",
-        "D:/model/conv/GraphConv/oop_graph/src/locomo results/conv/locomo_conv5.json",
-        "D:/model/conv/GraphConv/oop_graph/src/locomo results/conv/locomo_conv6.json",
-        "D:/model/conv/GraphConv/oop_graph/src/locomo results/conv/locomo_conv7.json",
-        "D:/model/conv/GraphConv/oop_graph/src/locomo results/conv/locomo_conv8.json",
-        "D:/model/conv/GraphConv/oop_graph/src/locomo results/conv/locomo_conv9.json",
-    ]
+    base_dir = os.environ.get("MOSAIC_DATA_DIR", os.path.join(os.path.dirname(__file__), "..", ".."))
+    conv_dir = os.path.join(base_dir, "locomo results", "conv")
+    file_pattern = os.path.join(conv_dir, "locomo_conv*.json")
+    conv_files = sorted(glob(file_pattern))
 
     # # 获取所有匹配的文件
     # conv_files = glob(file_pattern)

@@ -292,12 +292,13 @@ def batch_process_qas_selected():
     ]
 
 
-    # 定义基础路径
-    qa_dir = "D:/model/conv/GraphConv/oop_graph/src/locomo results/qa/"
-    graph_dir = "D:/model/conv/GraphConv/results/graph/"
-    tag_dir = "D:/model/conv/GraphConv/results/tags/"
-    output_dir = "D:/model/conv/GraphConv/results/answers/"
-    summary_output_dir = "D:/model/conv/GraphConv/results/answers/summary/"
+    # 定义基础路径（通过环境变量或相对路径配置）
+    base_dir = os.environ.get("MOSAIC_DATA_DIR", os.path.join(os.path.dirname(__file__), "..", ".."))
+    qa_dir = os.path.join(base_dir, "locomo results", "qa")
+    graph_dir = os.path.join(base_dir, "results", "graph")
+    tag_dir = os.path.join(base_dir, "results", "tags")
+    output_dir = os.path.join(base_dir, "results", "answers")
+    summary_output_dir = os.path.join(base_dir, "results", "answers", "summary")
 
     all_results = {}
 

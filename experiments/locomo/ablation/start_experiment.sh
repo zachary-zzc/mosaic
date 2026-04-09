@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 # Ablation experiment — run all ablation conditions on LoCoMo.
 #
+# NOTE: This script is Unix/macOS only. For Windows (or cross-platform),
+#       use the Python equivalent instead:
+#       python experiments/locomo/ablation/start_experiment.py
+#
 # Each condition disables one MOSAIC component and re-evaluates on LoCoMo.
 # C0/C1 reuse benchmark results; C2-C6 run with env var overrides.
 #

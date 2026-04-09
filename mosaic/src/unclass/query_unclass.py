@@ -109,12 +109,13 @@ def batch_process_qas_selected():
         ("qa_8", "instances_snapshot_conv8_20260314.json", "conv1_tag_new.json", "qa_8_i_answer.json"),
         ("qa_9", "instances_snapshot_conv9_20260314.json", "conv1_tag_new.json", "qa_9_i_answer.json"),
     ]
-    # 定义基础路径
-    qa_dir = "D:/model/conv/GraphConv/oop_graph/src/locomo results/qa/"
-    graph_dir = "D:/model/conv/GraphConv/results/instances/"
-    tag_dir = "D:/model/conv/GraphConv/results/tags/"
-    output_dir = "D:/model/conv/GraphConv/results/answers/instances_20"
-    summary_output_dir = "D:/model/conv/GraphConv/results/answers/summary/"
+    # 定义基础路径（通过环境变量或相对路径配置）
+    base_dir = os.environ.get("MOSAIC_DATA_DIR", os.path.join(os.path.dirname(__file__), "..", ".."))
+    qa_dir = os.path.join(base_dir, "locomo results", "qa")
+    graph_dir = os.path.join(base_dir, "results", "instances")
+    tag_dir = os.path.join(base_dir, "results", "tags")
+    output_dir = os.path.join(base_dir, "results", "answers", "instances_20")
+    summary_output_dir = os.path.join(base_dir, "results", "answers", "summary")
 
     all_results = {}
 
