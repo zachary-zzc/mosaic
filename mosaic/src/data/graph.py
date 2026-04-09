@@ -122,6 +122,7 @@ class ClassGraph:
 
         self.selected_instance_keys = set()  # 用于存储已选中实例的唯一标识
         self._retrieval_bge_accum: list[dict[str, Any]] = []  # 单次查询内多次 _fetch 的 BGE 遥测
+        self._bge_embedding_cache: dict[str, Any] | None = None  # 构图阶段 BGE 嵌入缓存，供查询复用
         # B 轨遥测（docs/optimization.md §5 B-3）：跨批次累计，供日志与快照/EntityGraph legacy
         self.sense_class_telemetry_cumulative: dict[str, int] = {
             "tfidf_matched_fragment_labels": 0,
@@ -149,6 +150,8 @@ class ClassGraph:
             self.G_p = nx.DiGraph()
         if not hasattr(self, "G_a") or self.G_a is None:
             self.G_a = nx.Graph()
+        if not hasattr(self, "_bge_embedding_cache"):
+            self._bge_embedding_cache = None
         self._rebuild_dual_nx_from_edges()
 
     def __str__(self):
@@ -1351,8 +1354,11 @@ class ClassGraph:
         query: str,
         all_instances: list,
         instance_max_scores: dict[int, float],
+        instance_class_map: dict[int, dict] | None = None,
     ) -> tuple[dict[int, float], dict[str, Any]]:
         from src.retrieval.bge_query import minmax_01, query_instance_cosine_similarities
+        import numpy as np
+        import time
 
         cfg = get_query_retrieval_config()
         aux: dict[str, Any] = {
@@ -1360,6 +1366,7 @@ class ClassGraph:
             "bge_lambda": cfg.bge_lambda,
             "bge_ms": 0.0,
             "bge_pool_size": 0,
+            "bge_cache_used": False,
         }
         if cfg.bge_lambda <= 0 or not instance_max_scores:
             return instance_max_scores, aux
@@ -1370,6 +1377,88 @@ class ClassGraph:
         idxs = sorted(instance_max_scores.keys(), key=lambda i: instance_max_scores[i], reverse=True)
         cap = min(cfg.bge_max_encode_instances, len(idxs))
         pool_list = idxs[:cap]
+
+        # 尝试使用构图阶段的预计算嵌入缓存
+        cache = getattr(self, "_bge_embedding_cache", None)
+        if cache and instance_class_map is not None:
+            try:
+                t0 = time.perf_counter()
+                # 查找缓存命中的实例
+                cached_embs: list[np.ndarray] = []
+                cached_indices: list[int] = []
+                uncached_indices: list[int] = []
+                for inst_idx in pool_list:
+                    inst = all_instances[inst_idx]
+                    cls_info = instance_class_map.get(inst_idx)
+                    if cls_info:
+                        eid = f"{cls_info['class_id']}:{inst.get('instance_id', '')}"
+                    else:
+                        eid = None
+                    if eid and eid in cache:
+                        cached_embs.append(cache[eid])
+                        cached_indices.append(inst_idx)
+                    else:
+                        uncached_indices.append(inst_idx)
+
+                if cached_indices:
+                    from sentence_transformers import SentenceTransformer
+                    model = SentenceTransformer(path)
+                    q_emb = model.encode([query], convert_to_numpy=True)
+                    q_emb = q_emb / np.maximum(np.linalg.norm(q_emb, axis=1, keepdims=True), 1e-12)
+                    q_emb = np.asarray(q_emb, dtype=np.float32)
+
+                    # 对缓存命中的实例直接用矩阵乘法
+                    doc_mat = np.stack(cached_embs, axis=0).astype(np.float32)
+                    cached_sims = (q_emb @ doc_mat.T)[0].tolist()
+
+                    # 对缓存未命中的实例退回到编码
+                    uncached_sims: list[float] = []
+                    if uncached_indices:
+                        uncached_texts: list[str] = []
+                        for inst_idx in uncached_indices:
+                            inst = all_instances[inst_idx]
+                            parts = [tx for _ty, tx in build_instance_fragments(inst) if (tx or "").strip()]
+                            uncached_texts.append("\n".join(parts) if parts else " ")
+                        uc_emb = model.encode(list(uncached_texts), convert_to_numpy=True)
+                        uc_emb = uc_emb / np.maximum(np.linalg.norm(uc_emb, axis=1, keepdims=True), 1e-12)
+                        uc_emb = np.asarray(uc_emb, dtype=np.float32)
+                        uncached_sims = (q_emb @ uc_emb.T)[0].tolist()
+
+                    # 按 pool_list 原始顺序重组相似度
+                    bge_raw: list[float] = []
+                    ci, ui = 0, 0
+                    for inst_idx in pool_list:
+                        if ci < len(cached_indices) and inst_idx == cached_indices[ci]:
+                            bge_raw.append(cached_sims[ci])
+                            ci += 1
+                        else:
+                            bge_raw.append(uncached_sims[ui])
+                            ui += 1
+
+                    ms = (time.perf_counter() - t0) * 1000.0
+                    aux["bge_ms"] = round(ms, 3)
+                    aux["bge_applied"] = True
+                    aux["bge_pool_size"] = len(pool_list)
+                    aux["bge_cache_used"] = True
+                    aux["bge_cache_hits"] = len(cached_indices)
+                    aux["bge_cache_misses"] = len(uncached_indices)
+                    _logger.debug(
+                        "query BGE: 缓存命中 %d/%d 实例",
+                        len(cached_indices), len(pool_list),
+                    )
+                    tfidf_pool = [instance_max_scores[i] for i in pool_list]
+                    t01 = minmax_01(tfidf_pool)
+                    b01 = minmax_01(bge_raw)
+                    lam = cfg.bge_lambda
+                    fused_pool = [(1.0 - lam) * t01[j] + lam * b01[j] for j in range(len(pool_list))]
+                    new_scores = dict(instance_max_scores)
+                    for j, inst_idx in enumerate(pool_list):
+                        new_scores[inst_idx] = fused_pool[j]
+                    return new_scores, aux
+            except Exception as e:
+                _logger.warning("query BGE 缓存路径失败，退回完整编码: %s", e)
+
+        # 退回路径：无缓存或缓存查找失败，使用原始完整编码
         texts: list[str] = []
         for inst_idx in pool_list:
             inst = all_instances[inst_idx]
@@ -1574,7 +1663,7 @@ class ClassGraph:
             return 0, "", []
 
         instance_max_scores, bge_aux = self._maybe_fuse_instance_scores_with_bge(
-            query, all_instances, instance_max_scores
+            query, all_instances, instance_max_scores, instance_class_map
         )
         self._retrieval_bge_accum.append(bge_aux)
 
