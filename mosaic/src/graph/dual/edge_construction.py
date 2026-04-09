@@ -63,6 +63,13 @@ def add_semantic_association_edges_bge(cg: Any, cfg: Any) -> dict[str, int]:
         _logger.warning("E_A BGE: 编码失败，跳过: %s", e)
         return stats
 
+    # 缓存实体嵌入到 ClassGraph，查询阶段直接复用，避免重复编码
+    cache = {eid: emb[i] for i, eid in enumerate(ids)}
+    if not hasattr(cg, "_bge_embedding_cache") or cg._bge_embedding_cache is None:
+        cg._bge_embedding_cache = {}
+    cg._bge_embedding_cache.update(cache)
+    _logger.info("E_A BGE: 已缓存 %d 条实体嵌入供查询复用", len(cache))
+
     existing_a = _existing_a_pairs(cg)
     pairs = pairwise_cosine_top_pairs(
         ids,
