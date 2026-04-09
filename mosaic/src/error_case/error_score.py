@@ -48,10 +48,11 @@ def save_intermediate_results(
 
 def main():
     # 读取数据
-    filename = "D:/model/conv/GraphConv/oop_graph/src/error_case/error_data1.json"
+    base_dir = os.environ.get("MOSAIC_DATA_DIR", os.path.join(os.path.dirname(__file__)))
+    filename = os.path.join(base_dir, "error_data1.json")
     error_data = read_to_file_json(filename)
 
-    filename = "D:/model/conv/GraphConv/oop_graph/src/error_case/conflict/warning_items.json"
+    filename = os.path.join(base_dir, "conflict", "warning_items.json")
     warning_items = read_to_file_json(filename)
 
     total_error_pairs = len(error_data)
@@ -63,7 +64,7 @@ def main():
     matched_warning_indices = set()
 
     # 输出路径
-    output_dir = "D:/model/conv/GraphConv/oop_graph/src/error_case/conflict/results/"
+    output_dir = os.path.join(base_dir, "conflict", "results")
 
     # 实时保存初始状态（空结果）
     save_intermediate_results(

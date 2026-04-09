@@ -104,7 +104,7 @@ def setup_conversation_logger(conversation_id: str):
     # If not already configured, add a file handler and an in-memory handler.
     if not conv_logger.handlers:
         # Create a directory for conversation logs if it doesn't exist.
-        conv_log_dir = "./conversation_logs"
+        conv_log_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "conversation_logs")
         if not os.path.exists(conv_log_dir):
             os.makedirs(conv_log_dir)
         conv_log_path = os.path.join(conv_log_dir, f"{conversation_id}.log")

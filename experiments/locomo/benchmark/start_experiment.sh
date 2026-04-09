@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 # LoCoMo full experiment pipeline
 #
+# NOTE: This script is Unix/macOS only. For Windows (or cross-platform),
+#       use the Python equivalent instead:
+#       python experiments/locomo/benchmark/start_experiment.py
+#
 # Reads experiment_sessions.json for the conversation list, then for each
 # conversation runs graph construction + full QA evaluation with two strategies:
 #   1. hybrid     — TF-IDF + LLM joint graph construction

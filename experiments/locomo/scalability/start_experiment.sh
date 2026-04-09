@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 # Scalability experiment — measure build time and accuracy vs conversation length.
 #
+# NOTE: This script is Unix/macOS only. For Windows (or cross-platform),
+#       use the Python equivalent instead:
+#       python experiments/locomo/scalability/start_experiment.py
+#
 # Truncates LoCoMo conversations to varying lengths and runs build + QA.
 #
 # Usage:

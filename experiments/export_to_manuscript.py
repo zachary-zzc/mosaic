@@ -7,7 +7,8 @@ Run experiments first, then run this script:
   python experiments/export_to_manuscript.py
 
 Or use the dataset-level orchestrator:
-  experiments/locomo/start_experiment.sh
+  python experiments/locomo/start_experiment.py
+  experiments/locomo/start_experiment.sh  (Unix/macOS only)
 """
 import os
 import sys

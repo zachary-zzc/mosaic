@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 # LoCoMo dataset — run all sub-experiments in sequence.
 #
+# NOTE: This script is Unix/macOS only. For Windows (or cross-platform),
+#       use the Python equivalent instead:
+#       python experiments/locomo/start_experiment.py
+#
 # Runs: benchmark → ablation → scalability, then exports LaTeX tables.
 #
 # Usage:

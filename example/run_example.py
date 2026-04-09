@@ -21,9 +21,6 @@ MOSAIC = os.path.join(ROOT, "mosaic")
 if MOSAIC not in sys.path:
     sys.path.insert(0, MOSAIC)
 
-# Optional: avoid loading embedding/KeyBERT models to reduce local dependencies
-os.chdir(MOSAIC)
-
 
 def main():
     parser = argparse.ArgumentParser(description="Run mosaic example (build graph + query)")

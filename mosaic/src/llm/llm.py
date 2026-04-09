@@ -95,7 +95,7 @@ class CustomChatModel(BaseChatModel):
     """Custom Chat Model that interfaces with a custom server."""
 
     model_url: str  # URL of your custom model server
-    model_name: str = "/home/dalhxwlyjsuo/criait_zhaotf/32B_RL_SFT"  # Default model name
+    model_name: str = os.environ.get("MOSAIC_CUSTOM_MODEL_NAME", "custom-model")
     temperature: float = 0.0
     max_tokens: int = 32768
 

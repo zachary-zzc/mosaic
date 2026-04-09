@@ -17,7 +17,8 @@ Data is read from `dataset/locomo/`.
 experiments/locomo/
 ├── README.md
 ├── _utils.py                       # Shared utilities (path setup, JSON, dataset access)
-├── start_experiment.sh             # Run ALL sub-experiments in sequence
+├── start_experiment.sh             # Run ALL sub-experiments (Unix/macOS)
+├── start_experiment.py            # Run ALL sub-experiments (cross-platform)
 ├── benchmark/
 │   ├── run.py                      # Full pipeline (build + QA + aggregate)
 │   ├── start_experiment.sh
@@ -42,6 +43,10 @@ experiments/locomo/
 
 ```bash
 # Run everything (benchmark → ablation → scalability → export)
+# Cross-platform (Windows / macOS / Linux):
+python experiments/locomo/start_experiment.py
+
+# Unix/macOS only:
 cd experiments/locomo && ./start_experiment.sh
 
 # Or run individual sub-experiments:
@@ -49,8 +54,11 @@ python experiments/locomo/benchmark/run.py
 python experiments/locomo/ablation/run.py
 python experiments/locomo/scalability/run.py
 
-# Background execution for any sub-experiment:
+# Background execution (Unix/macOS):
 cd experiments/locomo/benchmark && nohup ./start_experiment.sh > runs/experiment.log 2>&1 &
+
+# Background execution (Windows PowerShell):
+Start-Process python -ArgumentList "experiments/locomo/benchmark/start_experiment.py" -RedirectStandardOutput "runs/experiment.log"
 ```
 
 ### Benchmark options

@@ -5,6 +5,7 @@ import json
 import os
 import pickle
 import time
+from glob import glob
 
 try:
     from tqdm import tqdm
@@ -654,16 +655,10 @@ def process_single_conv(file_path):
 
 def process_all_convs():
     """处理目录下所有符合条件的conv文件"""
-    # 定义要处理的文件模式
-    file_pattern = "./locomo results/conv/locomo_conv*.json"
-
-    conv_files = [
-        "./locomo results/conv/locomo_conv1.json",
-        "./locomo results/conv/locomo_conv2.json",
-        "./locomo results/conv/locomo_conv5.json",
-        "./locomo results/conv/locomo_conv6.json",
-        "./locomo results/conv/locomo_conv8.json"
-    ]
+    base_dir = os.environ.get("MOSAIC_DATA_DIR", os.path.join(os.path.dirname(__file__), ".."))
+    conv_dir = os.path.join(base_dir, "locomo results", "conv")
+    file_pattern = os.path.join(conv_dir, "locomo_conv*.json")
+    conv_files = sorted(glob(file_pattern))
 
 
 
@@ -685,9 +680,3 @@ def process_all_convs():
 if __name__ == '__main__':
     #对话准确率数据的测试
     process_all_convs()
-#
-#     # #高血压数据用于去做error_case
-#     # file_name = "D:/model/conv/GraphConv/oop_graph/src/error_case/chunks.json"
-#     # with open(file_name, 'r', encoding='utf-8') as f:
-#     #     data = json.load(f)
-#     # save_error(data)
