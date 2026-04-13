@@ -48,31 +48,62 @@ DEFAULT_LENGTHS = [50, 100, 200, 300, 400, 500, 600]
 
 def truncate_conversation(conv_json_path, max_messages, out_path):
     """Write a truncated copy of a LoCoMo conversation JSON.
-    Returns the actual message count written."""
+    Returns the actual message count written.
+
+    Handles the LoCoMo session-based format (dict with session_1, session_2, ...)
+    as well as flat list and {conversation: [...]} formats.
+    """
+    import re as _re
+
     with open(conv_json_path, "r", encoding="utf-8") as f:
         data = json.load(f)
 
-    # LoCoMo conversations are a list of message dicts
-    if isinstance(data, list):
-        messages = data
-    elif isinstance(data, dict) and "conversation" in data:
-        messages = data["conversation"]
-    else:
-        messages = data
-
-    truncated = messages[:max_messages]
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
 
+    # --- flat list ---
+    if isinstance(data, list):
+        truncated = data[:max_messages]
+        with open(out_path, "w", encoding="utf-8") as f:
+            json.dump(truncated, f, ensure_ascii=False)
+        return len(truncated)
+
+    # --- {conversation: [...]} wrapper ---
     if isinstance(data, dict) and "conversation" in data:
+        truncated = data["conversation"][:max_messages]
         out_data = dict(data)
         out_data["conversation"] = truncated
-    else:
-        out_data = truncated
+        with open(out_path, "w", encoding="utf-8") as f:
+            json.dump(out_data, f, ensure_ascii=False)
+        return len(truncated)
+
+    # --- LoCoMo session-based format ---
+    session_keys = sorted(
+        [k for k in data if _re.match(r"session_\d+$", k)],
+        key=lambda k: int(k.split("_")[1]),
+    )
+    total = 0
+    out_data = {}
+    for k, v in data.items():
+        if _re.match(r"session_\d+$", k):
+            continue  # handled below
+        out_data[k] = v  # copy metadata (speaker_a, session_X_date_time, ...)
+
+    for sk in session_keys:
+        msgs = data[sk]
+        remaining = max_messages - total
+        if remaining <= 0:
+            break
+        kept = msgs[:remaining]
+        out_data[sk] = kept
+        # also copy associated date_time key
+        dt_key = f"{sk}_date_time"
+        if dt_key in data:
+            out_data[dt_key] = data[dt_key]
+        total += len(kept)
 
     with open(out_path, "w", encoding="utf-8") as f:
         json.dump(out_data, f, ensure_ascii=False)
-
-    return len(truncated)
+    return total
 
 
 def build_graph(conv_json_path, conv_name, art_dir, log_dir):

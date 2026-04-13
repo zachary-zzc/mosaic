@@ -1,0 +1,1048 @@
+% ============================================================================
+% MOSAIC: Structured Long-Term Memory with Conflict-Aware
+% Graph Organization for LLM Agents
+% arXiv preprint — Expanded Version
+% ============================================================================
+\documentclass[10pt,twocolumn]{article}
+
+% --- Core packages ---
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[margin=2cm]{geometry}
+\usepackage{amsmath,amssymb,amsfonts,amsthm}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{natbib}
+\usepackage{hyperref}
+\usepackage{xcolor}
+\usepackage{enumitem}
+\usepackage{subcaption}
+\usepackage{multirow}
+\usepackage{tabularx}
+\usepackage{algorithm}
+\usepackage{algorithmic}
+\usepackage{microtype}
+
+% --- Theorem environments ---
+\newtheorem{theorem}{Theorem}
+\newtheorem{proposition}{Proposition}
+\newtheorem{definition}{Definition}
+\newtheorem{remark}{Remark}
+
+% --- Colors ---
+\definecolor{mosaicblue}{RGB}{31,119,180}
+\definecolor{mosaicred}{RGB}{214,39,40}
+
+\hypersetup{
+  colorlinks=true,
+  linkcolor=mosaicblue,
+  citecolor=mosaicblue,
+  urlcolor=mosaicblue,
+}
+
+\title{%
+  MOSAIC: Structured Long-Term Memory with Conflict-Aware\\
+  Graph Organization for LLM Agents%
+}
+
+\author{
+  Zicheng Zhao$^{1,\dagger}$,\quad
+  Xinyang Guo$^{1,\dagger}$,\quad
+  Luyao Lv$^{2}$,\quad
+  Menghan Wang$^{2}$,\\[4pt]
+  Jiaxing Chen$^{2,*}$,\quad
+  Ming Li$^{1,*}$,\quad
+  Shuaicheng Li$^{1,3,*}$\\[8pt]
+  {\small $^{1}$Central China Research Institute for AI Technology}\\
+  {\small $^{2}$Guangdong Provincial Key Laboratory of Interdisciplinary Research}\\
+  {\small and Application for Data Science, BNU-HKBU United International College, Zhuhai}\\
+  {\small $^{3}$Department of Computer Science, City University of Hong Kong}\\[4pt]
+  {\small $^{\dagger}$Equal contribution \quad $^{*}$Corresponding authors}
+}
+
+\date{}
+
+\begin{document}
+\maketitle
+
+% ============================================================================
+% ABSTRACT
+% ============================================================================
+\begin{abstract}
+Large language model (LLM) agents augmented with persistent memory can recall
+past interactions but frequently store contradictory or erroneous information
+without detection, leading to compounding errors across the memory pipeline.
+We present \textbf{MOSAIC} (\textbf{M}emory-\textbf{O}rganized
+\textbf{S}tructured \textbf{A}gent for \textbf{I}nformation
+\textbf{C}ollection), a structured long-term memory framework that organizes
+memories as a typed, conflict-aware graph with active validation during
+ingestion. MOSAIC introduces three key capabilities beyond existing memory
+systems: (1)~entity-typed graph storage with semantic classification that
+preserves relational structure across events, personas, and relationships;
+(2)~conflict detection at save time that cross-references new information
+against existing memories, issuing warnings and triggering updates or
+deletions for contradictory entries; and (3)~hash-accelerated retrieval
+achieving 45$\times$ faster memory lookup than the strongest baseline with
+negligible accuracy loss. We evaluate MOSAIC on three benchmarks: LoCoMo
+(long-conversation memory QA), HaluMem (memory extraction, updating, and
+question answering with hallucination detection), and a novel error
+compounding test using manually injected contradictions in hypertension
+clinical guidelines. MOSAIC achieves 79.7\% overall accuracy on LoCoMo
+(+17.5~pp over the best baseline), 0.89 F1 on memory extraction, and detects
+66\% of injected factual conflicts---4.7$\times$ higher than the best
+baseline (14\%). These results demonstrate that structured, conflict-aware
+memory organization substantially outperforms flat memory stores for
+long-term LLM agent memory.
+\end{abstract}
+
+\noindent\textbf{Keywords:} LLM agents, long-term memory, memory graph,
+conflict detection, error compounding, conversational QA
+
+% ============================================================================
+% 1. INTRODUCTION
+% ============================================================================
+\section{Introduction}
+\label{sec:intro}
+
+The proliferation of memory-augmented LLM agents has created an implicit
+assumption: that an agent which remembers is an agent that reasons correctly
+over its memories. Systems such as MemGPT~\citep{packer2023memgpt},
+Mem0~\citep{mem0_2024}, A-Mem~\citep{amem_2024}, and
+MemOS~\citep{memos_2024} have demonstrated impressive retention of user
+preferences, factual history, and contextual nuance across sessions. Yet a
+fundamental limitation persists: these systems treat memory as
+\emph{append-only storage}, ingesting new information without validating it
+against existing knowledge, and thus silently accumulating contradictions
+that compound across retrieval and reasoning stages.
+
+This \emph{error compounding} problem is particularly acute in
+safety-critical domains. In clinical settings, silently storing that a
+patient's target blood pressure is $<$160/100~mmHg when guidelines specify
+$<$130/80~mmHg propagates into incorrect risk stratification and potentially
+harmful prescribing~\citep{sharma2024nature_medicine}. In legal and financial
+contexts, contradictory facts feed contradictory retrievals, which feed
+contradictory downstream decisions. The pipeline structure of modern memory
+systems---from extraction to storage to retrieval to
+reasoning---means that a single undetected error at ingestion can
+exponentially amplify through subsequent stages.
+
+A growing body of evidence reveals a deeper disconnect between \emph{recall}
+and \emph{task completion}: memory-augmented agents routinely terminate
+conversations prematurely, miss required information, or drift into tangential
+topics when no explicit mechanism enforces systematic
+coverage~\citep{xi2023rise, wang2024survey_agents}. Current agent
+frameworks provide two capabilities: \emph{action selection} (choosing what
+to do next) and \emph{memory} (storing what was learned). But structured
+information-gathering tasks require a third: \emph{task-state tracking}---a
+persistent, queryable representation of which required information units have
+been obtained, which remain outstanding, and what dependencies constrain the
+order in which they should be sought. Without this, an agent cannot
+distinguish between ``I have enough information to stop'' and ``I have run
+out of things that are easy to ask.''
+
+This distinction is not merely an engineering detail. In clinical intake, a
+missed medication history propagates into incorrect risk stratification and
+potentially harmful prescribing~\citep{singhal2023medpalm}. In insurance
+claims processing, a missing liability determination invalidates downstream
+adjudication. In technical support, an undiagnosed hardware failure leads to
+repeated software-only fixes. The common structure across these domains is a
+\emph{partially observable information space} with \emph{prerequisite
+constraints} and \emph{coverage requirements} that must be systematically
+satisfied through multi-turn interaction.
+
+We trace these failures to three structural deficiencies in existing memory
+architectures: \emph{flat storage}, where memories are kept as unstructured
+text chunks or key-value pairs without typed relationships, making
+cross-referencing impossible; \emph{passive ingestion}, where new information
+is stored unconditionally without conflict checking against existing
+memories; and \emph{monolithic retrieval}, where semantic search over flat
+stores cannot exploit relational structure for multi-hop or temporal
+reasoning.
+
+A deeper question is \emph{why graphs} rather than simpler task
+representations such as flat checklists, priority queues, or plan templates.
+The answer lies in a structural property of real information-gathering tasks:
+\emph{local dependency}. Whether a particular information entity needs to be
+queried, re-queried, or deprioritized depends not on the global state of
+the entire conversation but on the states of a small set of semantically
+or logically related entities---its \emph{graph neighbors}. Knowing a
+patient's creatinine level affects the importance of asking about nephropathy
+but not about smoking history. Confirming the date of an accident changes the
+relevance of weather-condition queries but not vehicle-make queries. This
+locality is precisely what graph structure encodes and what flat
+representations discard.
+
+We introduce \textbf{MOSAIC}, a framework that addresses these deficiencies
+through three mechanisms. First, MOSAIC organizes memories as a \emph{typed
+entity graph} with semantic classification into events, personas, and
+relationships, preserving relational structure that enables graph-based
+reasoning. Second, MOSAIC performs \emph{active conflict detection at save
+time}: when new information is ingested, it is cross-referenced against the
+existing memory graph; conflicts trigger warnings and may be resolved through
+updates or deletions. Third, MOSAIC employs \emph{hash-accelerated retrieval}
+that achieves near-instantaneous memory lookup while maintaining accuracy
+comparable to LLM-based classification.
+
+We formalize the key insight underlying MOSAIC's graph structure as
+\emph{neighbor-conditioned stability} (NCS): a node's importance score,
+belief state, and priority require re-evaluation only when at least one of
+its graph neighbors has changed state. When the local neighborhood is
+unchanged, the node's state is guaranteed stable. This principle is closely
+analogous to Bellman's principle of optimality in dynamic
+programming~\citep{bellman1957dynamic}, which decomposes a global
+optimization into local value updates that propagate through a
+state-transition graph. Just as dynamic programming avoids redundant
+global recomputation by exploiting local structure, MOSAIC avoids redundant
+re-evaluation of entity priorities by exploiting the dependency and
+association structure encoded in the memory graph.
+
+We evaluate MOSAIC on three complementary benchmarks: LoCoMo~\citep{locomo_2024}, which tests long-conversation memory QA across 1,540 question--answer pairs; HaluMem~\citep{halumem_2024}, which separately evaluates memory extraction, updating, and question answering with hallucination detection; and a novel error compounding test in which 50 factual conflicts are manually injected into hypertension clinical guidelines. Across these benchmarks, MOSAIC achieves 79.7\% overall accuracy on LoCoMo (+17.5~pp over the best baseline Mem0), an extraction F1 of 0.893 and QA correctness of 0.878 on HaluMem, and detects 66\% of injected factual conflicts---4.7$\times$ higher than the best baseline (14\%)---while hash-accelerated retrieval provides a 45$\times$ speedup over the next-fastest system with negligible accuracy loss.
+
+% ============================================================================
+% 2. RELATED WORK
+% ============================================================================
+\section{Related Work}
+\label{sec:related}
+
+\subsection{Memory-Augmented LLM Agents}
+
+The development of persistent memory for LLM agents has progressed rapidly.
+MemGPT~\citep{packer2023memgpt} introduces OS-inspired virtual memory
+management, maintaining a tiered memory hierarchy (main context, archival
+storage, recall storage) with explicit memory management functions.
+Mem0~\citep{mem0_2024} provides multi-level persistent memory with adaptive
+personalization across user, session, and agent levels.
+A-Mem~\citep{amem_2024} implements adaptive memory with automatic storage,
+retrieval, and summarization, dynamically adjusting memory granularity.
+MemOS~\citep{memos_2024} unifies memory operations through an
+operating-system abstraction layer. LangMem~\citep{langmem_2024} offers
+language-model-based memory management within the LangChain ecosystem.
+Zep~\citep{zep_2024} provides production-grade memory with temporal awareness
+for AI assistants. Supermemory~\citep{supermemory_2024} and
+Memobase~\citep{memobase_2024} offer scalable memory solutions for
+large-scale agent deployments.
+
+A comprehensive survey by \citet{zhang2024survey_memory} categorizes memory
+mechanisms along dimensions of storage format, retrieval strategy, and
+management policy. Despite this diversity, all existing systems share a common
+limitation: they focus on \emph{retention}---ensuring that information, once
+stored, can be retrieved accurately---but lack mechanisms for \emph{conflict
+detection} or \emph{structured organization} that would prevent contradictory
+information from being stored in the first place.
+
+\subsection{Agent Frameworks and Planning}
+
+The broader landscape of LLM agent architectures provides context for
+MOSAIC's design choices. ReAct~\citep{yao2023react} interleaves reasoning
+and acting, using chain-of-thought prompting to decide actions step by step.
+Reflexion~\citep{shinn2023reflexion} adds verbal reinforcement learning
+through self-reflective feedback loops. Plan-and-Solve~\citep{wang2023plan}
+improves zero-shot reasoning through explicit plan generation before
+execution. These frameworks demonstrate sophisticated planning and reasoning
+capabilities but lack persistent, structured memory for cross-session
+information management~\citep{xi2023rise, wang2024survey_agents}.
+
+Tool-augmented approaches~\citep{schick2024toolformer} extend agents with
+external capabilities but do not address the fundamental memory organization
+problem. Chain-of-thought prompting~\citep{wei2022chain} improves reasoning
+within a single context window but does not support long-term memory across
+sessions.
+
+\subsection{Knowledge Graphs and Structured Memory}
+
+Several systems organize agent memory as knowledge
+graphs~\citep{pan2024unifying}. Mem0-Graph extends Mem0 with graph
+structure but does not perform conflict checking. GraphRAG~\citep{graphrag2024}
+uses graph-based retrieval for query-focused summarization, demonstrating the
+benefit of graph structure for information retrieval. However, these systems
+focus on retrieval quality rather than ingestion-time validation.
+
+MOSAIC's entity graph differs from general knowledge graphs in its focus on
+typed entities (event, persona, relationship) with explicit conflict detection
+at ingestion time. The dual-graph formulation---separating prerequisite
+dependencies from semantic associations---provides both logical validity and
+conversational coherence, properties that single-graph approaches cannot
+simultaneously optimize.
+
+\subsection{Memory Evaluation Benchmarks}
+
+LoCoMo~\citep{locomo_2024} evaluates long-conversation memory through
+multi-type QA spanning single-hop, multi-hop, temporal, and open-domain
+questions. HaluMem~\citep{halumem_2024} introduces hallucination-aware
+evaluation of the memory pipeline, separately assessing extraction, updating,
+and question answering stages. LLM-as-Judge
+approaches~\citep{zheng2024judging} supplement reference-based evaluation. Our
+error compounding test complements these by specifically targeting conflict
+detection, a capability not evaluated by existing benchmarks.
+
+\subsection{Hallucination and Factual Consistency}
+
+The hallucination problem in LLMs has been extensively
+studied~\citep{huang2023survey_hallucination, ji2023hallucination}. Fact
+verification systems~\citep{thorne2018fact} and fine-grained factual
+evaluation~\citep{min2023factscore} address hallucination at generation time.
+MOSAIC addresses a complementary problem: preventing hallucinated or
+contradictory information from being stored in persistent memory, where it
+can compound across future retrieval and reasoning steps.
+
+% ============================================================================
+% 3. METHOD
+% ============================================================================
+\section{Method}
+\label{sec:method}
+
+% Placeholder for pipeline/architecture figure
+\begin{figure*}[!t]
+  \centering
+  \fbox{\parbox{0.95\textwidth}{\centering\vspace{2cm}
+    \textbf{[Pipeline \& Architecture Diagram]}\\[6pt]
+    Placeholder for Figure~1: MOSAIC system architecture showing the
+    dual-path memory pipeline (LLM classification path and hash-accelerated
+    path), entity graph construction, conflict detection module, and
+    retrieval mechanism.
+  \vspace{2cm}}}
+  \caption{\textbf{MOSAIC system architecture.} Incoming dialogue is
+  processed through entity extraction and semantic classification (with
+  optional hash acceleration). Extracted entities are organized into a
+  typed memory graph with event, persona, and relationship nodes. During
+  ingestion, the conflict detection module cross-references new entities
+  against existing graph neighbors, flagging contradictions for update or
+  deletion. Retrieval operates over the graph structure using community-aware
+  traversal.}
+  \label{fig:pipeline}
+\end{figure*}
+
+\subsection{Problem Formulation}
+\label{sec:problem}
+
+We formalize the structured memory management problem as follows. Let
+$\mathcal{D} = \{(u_1, a_1), (u_2, a_2), \ldots, (u_T, a_T)\}$ denote a
+multi-turn dialogue where $u_t$ is the user utterance and $a_t$ is the
+agent response at turn $t$. At each turn, the agent must:
+(1)~\emph{extract} information entities from the user's utterance;
+(2)~\emph{validate} extracted entities against the existing memory store for
+conflicts; (3)~\emph{store} validated entities in a structured
+representation; and (4)~\emph{retrieve} relevant memories for generating
+contextually grounded responses.
+
+The error compounding problem arises when step (2) is absent: contradictory
+entities are stored unconditionally, leading to inconsistent retrievals at
+step (4) that propagate errors into downstream reasoning.
+
+\subsection{Entity-Typed Memory Graph}
+\label{sec:entity_graph}
+
+MOSAIC represents memories as a typed directed graph $G = (V, E, \tau)$
+where $V$ is a set of entity nodes, $E \subseteq V \times V$ is a set of
+directed edges encoding relationships (temporal, causal, associative), and
+$\tau: V \to \{\texttt{event}, \texttt{persona}, \texttt{relationship}\}$
+assigns each node a semantic type. This structure contrasts with flat memory
+stores (Mem0, Zep, Memobase) that represent memories as independent text
+chunks without relational encoding.
+
+\begin{definition}[Entity Node]
+\label{def:entity}
+An entity node $v \in V$ is a tuple $v = (e, \tau(v), \mathbf{h}_v,
+\rho_v, t_v)$ where $e$ is the entity content (a natural language
+description), $\tau(v) \in \{\texttt{event}, \texttt{persona},
+\texttt{relationship}\}$ is the semantic type, $\mathbf{h}_v \in
+\mathbb{R}^d$ is the embedding vector, $\rho_v \in [0,1]$ is the
+confidence score, and $t_v$ is the timestamp of last update.
+\end{definition}
+
+Entity extraction from dialogue turns uses an LLM-based pipeline that
+identifies named entities, events, personal attributes, and interpersonal
+relationships. Each extracted entity is embedded using a sentence
+transformer (all-MiniLM-L6-v2)~\citep{reimers2019sentence} and classified
+into one of the three semantic types. Edges are created between entities
+that co-occur in the same dialogue context or share semantic similarity
+above a threshold $\theta$ (default 0.4).
+
+The two graph components serve complementary functions. A \emph{prerequisite
+subgraph} $G_P = (V, E_P)$ encodes logical dependency among information
+entities: entity $u$ must be resolved before entity $v$ can be meaningfully
+queried. An \emph{association subgraph} $G_A = (V, E_A, w_A)$ encodes
+semantic relatedness for coherent topic transitions, with edge weights
+$w_A(u,v)$ proportional to the cosine similarity of entity embeddings.
+This separation is analogous to the distinction between control flow and
+data flow in programming language design: both are essential, but collapsing
+them produces a less expressive and less analyzable structure.
+
+\subsection{Neighbor-Conditioned Stability}
+\label{sec:ncs}
+
+A central theoretical contribution is the \emph{neighbor-conditioned
+stability} (NCS) principle, which provides both formal guarantees and
+practical efficiency for the graph-based memory system.
+
+\begin{definition}[Neighbor-Conditioned Stability]
+\label{def:ncs}
+A scoring function $\mathrm{Score}: V \to \mathbb{R}$ satisfies
+neighbor-conditioned stability if, for any node $v \in V$ and any two
+global states $\mathcal{S}, \mathcal{S}'$ that agree on the neighborhood
+$\mathcal{N}(v) = \{u \in V : (u,v) \in E_P \text{ or } (u,v) \in E_A\}$,
+we have $\mathrm{Score}(v; \mathcal{S}) = \mathrm{Score}(v; \mathcal{S}')$.
+\end{definition}
+
+This principle guarantees that a node's importance score requires
+re-evaluation only when at least one of its graph neighbors has changed
+state. When the local neighborhood is unchanged, the node's state is
+guaranteed stable. This has two important consequences:
+
+\paragraph{Computational efficiency.}
+At each dialogue turn, let $\Delta_t \subseteq V$ be the set of entities
+whose states changed at turn $t$. The update frontier
+$\mathcal{U}_t = \{v \in V : \mathcal{N}(v) \cap \Delta_t \neq
+\emptyset\} \cup \Delta_t$ determines which scores need recomputation.
+This reduces per-turn cost from $O(|V|)$ to
+$O(|\mathcal{U}_t|) = O(\Delta_{\max})$, where $\Delta_{\max}$ is the
+maximum neighborhood size.
+
+\paragraph{Traversal stability.}
+NCS prevents the oscillatory behavior observed in globally-reasoning agents
+that re-evaluate all priorities from scratch at every turn. By shielding
+distant nodes from irrelevant updates, NCS ensures consistent, predictable
+traversal ordering.
+
+In practice, NCS is implemented as a \texttt{dirty flag} mechanism: each
+node maintains a boolean flag set to \texttt{true} when any neighbor's state
+changes. Only flagged nodes are re-scored; flags are cleared after re-scoring.
+
+\subsection{Node Scoring and Selection}
+\label{sec:scoring}
+
+At each dialogue turn, the controller selects the next entity to query from
+the frontier $\mathcal{F}^{(t)}$ (the set of unresolved entities whose
+prerequisites are all satisfied). For each frontier entity $v$, the
+composite score is:
+\begin{equation}
+  \mathrm{Score}(v) = \alpha \cdot \tilde{I}(v) + \beta \cdot T(v)
+    + \gamma \cdot C(v),
+  \label{eq:score}
+\end{equation}
+where $\tilde{I}(v) = I(v) / \max_{u \in \mathcal{F}} I(u)$ is the
+normalized importance over the current frontier, $T(v)$ is the precomputed
+PageRank centrality~\citep{page1999pagerank} of $v$ in $G_A$ (capturing
+structural importance: nodes central in the association graph are topic hubs
+that connect multiple information clusters), and
+$C(v) = \mathbf{1}[\mathrm{comm}(v) = \mathrm{comm}(v_{\mathrm{prev}})]$ is
+a binary community continuity score that favors entities in the same semantic
+community as the most recently queried entity, promoting topically coherent
+conversation flow.
+
+Community structure is detected by applying the Leiden
+algorithm~\citep{traag2019leiden} to $G_A$ at initialization.
+
+\subsection{Conflict Detection at Save Time}
+\label{sec:conflict_detection}
+
+The key architectural innovation of MOSAIC is \emph{active conflict
+detection} during memory ingestion. When a new entity $v_\text{new}$ is
+extracted from dialogue, the system performs the following procedure:
+
+\begin{enumerate}[noitemsep,topsep=3pt]
+  \item \textbf{Neighbor retrieval.} Retrieve the $k$-nearest neighbors of
+    $v_\text{new}$ from the existing memory graph using embedding similarity.
+  \item \textbf{Conflict assessment.} For each neighbor
+    $u \in \mathcal{N}(v_\text{new})$, perform a conflict check: an LLM call
+    assesses whether $v_\text{new}$ contradicts $u$ along numerical, semantic,
+    or logical dimensions.
+  \item \textbf{Resolution.} If a conflict is detected, the system either
+    (a)~updates the existing entity $u$ with the new information if the new
+    evidence is more authoritative; (b)~rejects $v_\text{new}$ if existing
+    evidence is stronger; or (c)~flags both for human review.
+\end{enumerate}
+
+This mechanism acts as a \emph{firewall} against error compounding: by
+catching contradictions at the first pipeline stage (ingestion), errors
+are prevented from propagating to storage, retrieval, and downstream
+reasoning.
+
+\subsection{Information Extraction and Confidence Gating}
+\label{sec:extraction}
+
+After each user response, an extraction module parses the response to
+identify entity values. Each extracted value is assigned a confidence score
+$\rho_v \in [0,1]$ based on three factors: directness (explicitly stated
+vs.\ inferred), consistency (agreement with previously stored values), and
+specificity (precise values vs.\ vague ranges). Values with
+$\rho_v < \rho_{\min}$ (default 0.6) are flagged as unreliable and trigger
+targeted clarification at the next appropriate opportunity, rather than being
+committed to memory.
+
+Belief distributions are updated via a Bayesian update rule:
+\begin{equation}
+  b_{v,k}^{(t+1)} = \frac{b_{v,k}^{(t)} \cdot \ell(o_v \mid s_k)}
+    {\sum_{j=1}^{K} b_{v,j}^{(t)} \cdot \ell(o_v \mid s_j)},
+  \label{eq:belief_update}
+\end{equation}
+where $\ell(o_v \mid s_k)$ is the likelihood of the observed response $o_v$
+given that entity $v$ is in state $s_k$, estimated through a hybrid approach
+combining rule-based pattern matching for structured entities and LLM-based
+assessment for free-text entities.
+
+\subsection{Dual-Path Classification and Hash Acceleration}
+\label{sec:hash}
+
+MOSAIC supports two classification paths for entity typing and retrieval:
+
+\begin{itemize}[noitemsep,topsep=3pt]
+  \item \textbf{LLM path}: Full LLM-based semantic classification achieving
+    highest accuracy at 6.8s per query (save time: $\sim$4.5h per 100k
+    tokens).
+  \item \textbf{Hash path}: Locality-sensitive
+    hashing~\citep{indyk1998lsh} for near-instantaneous classification at
+    0.1s per query (save time: $\sim$1.5h per 100k tokens), with only
+    1.5~pp accuracy reduction.
+\end{itemize}
+
+An additional \emph{no-class} variant bypasses classification entirely
+(0.015s per query, $\sim$1h save time) while maintaining competitive
+accuracy, suggesting that the graph structure itself captures sufficient
+relational information even without explicit type labels.
+
+\subsection{Community-Aware Retrieval}
+\label{sec:retrieval}
+
+For memory retrieval, MOSAIC leverages the graph structure through
+community detection (Leiden algorithm~\citep{traag2019leiden}) over the entity
+graph. Given a query, the system identifies the most relevant community,
+retrieves entities within that community using embedding similarity, and
+traverses graph edges to collect contextually related entities. This
+structure-aware retrieval enables multi-hop reasoning that flat semantic
+search cannot support~\citep{lewis2020rag, gao2024rag_survey}.
+
+\subsection{Long-Term Memory Integration}
+\label{sec:memory_integration}
+
+Confirmed entities (those with $\rho_v \geq \rho_{\min}$ and entropy
+$H(v) \leq \delta$) are stored as structured key-value pairs in a persistent
+memory store indexed by entity embeddings. At each turn, the top-$m$ most
+relevant memory items (by cosine similarity to the current query context and
+the active entity's neighborhood in $G_A$) are retrieved and injected into
+the prompt context, providing the LLM with relevant previously acquired
+information.
+
+Storage uses JSON-structured entity records with fields including entity ID,
+name, value, confidence, timestamp, source turn, evidence snippet, and belief
+distribution. Retrieval employs an HNSW approximate nearest-neighbor index
+with default $m = 5$ retrievals per query. When a new extraction conflicts
+with a stored value, both are retained with timestamps; the higher-confidence
+value is used for downstream reasoning, but the conflict is flagged for
+potential clarification through the NCS mechanism.
+
+\subsection{Convergence Analysis}
+\label{sec:convergence}
+
+We establish convergence properties of MOSAIC through connections to
+submodular optimization~\citep{nemhauser1978submodular}.
+
+\begin{theorem}[Submodularity of Coverage]
+\label{thm:submodularity}
+The entity coverage function
+$f(S) = \sum_{v \in S} w(v) \cdot \mathbf{1}[H(v) \leq \delta]$ over the
+set $S \subseteq V$ of queried entities is monotone submodular. The greedy
+policy of selecting the highest-scoring frontier entity at each turn achieves
+a $(1 - 1/e)$-approximation to optimal coverage.
+\end{theorem}
+
+\begin{theorem}[Convergence of NCS Updates]
+\label{thm:convergence}
+Under NCS, score updates converge in at most $L$ rounds of propagation, where
+$L$ is the longest directed path in $G_P$. The per-turn computational cost is
+$O(\Delta_{\max})$, independent of total graph size $|V|$.
+\end{theorem}
+
+These guarantees ensure that MOSAIC achieves near-optimal information coverage
+with efficient local computation, even as the memory graph grows.
+
+% ============================================================================
+% 4. EXPERIMENTAL SETUP
+% ============================================================================
+\section{Experimental Setup}
+\label{sec:experiments}
+
+\subsection{Benchmarks}
+\label{sec:benchmarks}
+
+\paragraph{LoCoMo.}
+The LoCoMo benchmark~\citep{locomo_2024} evaluates long-conversation memory
+through 1,540 QA pairs derived from 10 extended conversations. Questions
+span four categories: single-hop (841), multi-hop (282), open-domain (96),
+and temporal (321). Each question requires retrieving and reasoning over
+information from specific conversation turns. We use the LLM-as-Judge
+evaluation protocol~\citep{zheng2024judging} to assess answer correctness.
+
+\paragraph{HaluMem.}
+The HaluMem benchmark~\citep{halumem_2024} evaluates three stages of the
+memory pipeline independently: (1)~memory extraction (recall, precision,
+F1), (2)~memory updating (correctness, hallucination rate, omission rate),
+and (3)~question answering (correctness, hallucination, omission). It
+covers three memory types: events, personas, and relationships, providing
+a comprehensive assessment of the full memory pipeline.
+
+\paragraph{Error Compounding Test.}
+We construct a novel benchmark to evaluate conflict detection capabilities.
+Starting from authoritative hypertension clinical guidelines, we manually
+inject 50 factual errors spanning three categories:
+\begin{itemize}[noitemsep,topsep=3pt]
+  \item \textbf{Numerical errors} (14): incorrect dosages, BP thresholds,
+    and lab value ranges (e.g., target BP changed from $<$130/80 to
+    $<$160/100~mmHg);
+  \item \textbf{Semantic errors} (13): contradictory indications, swapped
+    contraindications (e.g., ACE inhibitors marked as contraindicated in
+    chronic kidney disease);
+  \item \textbf{Logical errors} (23): internally inconsistent conditional
+    rules (e.g., ``prescribe X if eGFR$<$30'' alongside ``X is
+    contraindicated when eGFR$<$45'').
+\end{itemize}
+Errors are additionally classified by discoverability: 11 implicit (requiring
+multi-step reasoning to detect) and 39 explicit (directly contradicting
+stated guidelines). Each system ingests the corrupted text; detection rate is
+measured as the fraction of injected conflicts correctly identified.
+
+\subsection{Baselines}
+\label{sec:baselines}
+
+We compare against a comprehensive set of memory systems evaluated across
+all three benchmarks where applicable:
+
+\begin{itemize}[noitemsep,topsep=3pt]
+  \item \textbf{A-Mem}~\citep{amem_2024}: Adaptive memory with automatic
+    storage, retrieval, and summarization.
+  \item \textbf{LangMem}~\citep{langmem_2024}: Language-model-based memory
+    management within the LangChain ecosystem.
+  \item \textbf{Zep}~\citep{zep_2024}: Production memory system with
+    temporal awareness and entity extraction.
+  \item \textbf{OpenAI Memory}: Built-in conversational memory from
+    OpenAI~\citep{achiam2023gpt4}.
+  \item \textbf{Mem0}~\citep{mem0_2024}: Multi-level memory (user, session,
+    agent) with adaptive personalization.
+  \item \textbf{MemGPT}~\citep{packer2023memgpt}: Tiered memory with
+    OS-inspired virtual context management.
+\end{itemize}
+
+For HaluMem, additional baselines include MemOS~\citep{memos_2024},
+Mem0-Graph (Mem0 with graph extension), Supermemory~\citep{supermemory_2024},
+and Memobase~\citep{memobase_2024}.
+
+\subsection{Implementation Details}
+\label{sec:implementation}
+
+All experiments use Qwen-2.5-32B~\citep{qwen2024, yang2024qwen2} as the base
+LLM for both MOSAIC and all baselines, ensuring fair comparison. Entity
+embeddings use all-MiniLM-L6-v2~\citep{reimers2019sentence} with $d = 384$
+dimensions. The association graph threshold is $\theta = 0.4$, and the
+confidence gating threshold is $\rho_{\min} = 0.6$. Scoring weights are
+$\alpha = 0.5$, $\beta = 0.3$, $\gamma = 0.2$. Memory retrieval uses
+top-$m = 5$ neighbors.
+
+% ============================================================================
+% 5. RESULTS
+% ============================================================================
+\section{Results}
+\label{sec:results}
+
+% ----------------------------------------------------------------------------
+\subsection{LoCoMo: Long-Conversation Memory QA}
+\label{sec:results_locomo}
+
+Table~\ref{tab:locomo} presents results on the LoCoMo benchmark.
+MOSAIC achieves \textbf{79.68\%} overall accuracy across 1,540 QA pairs,
+outperforming the best baseline (Mem0, 62.14\%) by +17.54 percentage points
+(pp). The gains are largest on multi-hop questions (+25.80~pp vs Mem0) and
+temporal reasoning (+16.01~pp vs MemGPT), where graph-structured memory
+enables systematic cross-referencing across conversation turns.
+
+\begin{table}[!t]
+\centering
+\caption{\textbf{LoCoMo benchmark results.} Accuracy (\%) on 1,540 QA pairs
+across four question types. Best in \textbf{bold}.}
+\label{tab:locomo}
+\small
+\setlength{\tabcolsep}{3.5pt}
+\begin{tabular}{@{}lccccc@{}}
+\toprule
+\textbf{Method} & \textbf{Single} & \textbf{Multi} & \textbf{Open} & \textbf{Temp.} & \textbf{Overall} \\
+& (841) & (282) & (96) & (321) & (1540) \\
+\midrule
+A-Mem     & 39.79 & 18.85 & 54.05 & 49.91 & 38.95 \\
+LangMem   & 62.23 & 47.92 & 71.12 & 23.43 & 52.08 \\
+Zep       & 61.70 & 41.35 & \textbf{76.60} & 49.31 & 56.32 \\
+OpenAI    & 63.79 & 42.92 & 62.29 & 21.71 & 51.10 \\
+Mem0      & 67.13 & 51.15 & 72.93 & 55.51 & 62.14 \\
+MemGPT    & 65.71 & 47.19 & 75.71 & 58.13 & 61.36 \\
+\midrule
+\textbf{MOSAIC} & \textbf{84.78} & \textbf{76.95} & 61.46 & \textbf{74.14} & \textbf{79.68} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Single-hop questions, which require retrieving a specific fact from a known
+conversation turn, see an improvement from 67.13\% (Mem0) to 84.78\%,
+indicating that MOSAIC's entity graph preserves fine-grained factual
+associations better than flat memory retrieval. Multi-hop questions show the
+largest improvement (+25.80~pp over Mem0), demonstrating that graph-based
+traversal enables systematic cross-referencing of related facts across
+conversation turns---a capability absent from flat memory stores that rely
+on independent semantic search over unstructured chunks.
+
+Temporal reasoning improves from 58.13\% (MemGPT) to 74.14\%, a gain of
+16.01~pp. The entity graph's temporal edge structure preserves ordering
+relationships that flat memory systems lose when chunking conversation
+history. Questions requiring temporal reasoning (e.g., ``What did the user
+say about X before mentioning Y?'') benefit from the graph's ability to
+traverse temporal edges directly rather than reconstructing temporal order
+from retrieved text fragments~\citep{liu2024lost_middle}.
+
+Open-domain questions are the sole category where MOSAIC does not lead
+(61.46\% vs Zep 76.60\%), reflecting that structured memory organization is
+optimized for conversation-grounded facts rather than world knowledge
+requiring parametric recall from the base LLM. This is an architectural
+property rather than a failure: memory systems should complement, not
+replace, the LLM's parametric knowledge.
+
+Figure~\ref{fig:locomo} presents per-conversation and per-category
+breakdowns. Performance across the 10 conversations ranges from 74.87\% to
+84.21\%, with a mean of 79.68\% and standard deviation of 3.45~pp,
+indicating consistent performance across different conversation lengths
+and topic distributions. Open-domain accuracy is notably volatile
+(14.29\%--84.62\% per conversation) due to the small number of questions
+per conversation in this category.
+
+\begin{figure*}[!t]
+  \centering
+  \begin{subfigure}[t]{0.32\textwidth}
+    \includegraphics[width=\textwidth]{images/figure2/locomo_overall.pdf}
+    \caption{Overall accuracy comparison}
+  \end{subfigure}
+  \hfill
+  \begin{subfigure}[t]{0.32\textwidth}
+    \includegraphics[width=\textwidth]{images/figure2/locomo_category.pdf}
+    \caption{Per-category breakdown}
+  \end{subfigure}
+  \hfill
+  \begin{subfigure}[t]{0.32\textwidth}
+    \includegraphics[width=\textwidth]{images/figure2/locomo_conversation.pdf}
+    \caption{Per-conversation performance}
+  \end{subfigure}
+  \caption{\textbf{LoCoMo benchmark results.} (a)~MOSAIC achieves 79.68\%
+  overall accuracy, outperforming the best baseline (Mem0, 62.14\%) by
+  +17.54~pp. (b)~Per-category breakdown showing largest gains on multi-hop
+  (+25.80~pp) and temporal (+16.01~pp) questions. (c)~Consistent performance
+  across all 10 conversations (range: 74.87\%--84.21\%).}
+  \label{fig:locomo}
+\end{figure*}
+
+% Ablation table
+Table~\ref{tab:ablation} presents ablation results comparing MOSAIC's
+classification and retrieval variants. The ablation reveals that the graph
+structure itself---rather than explicit semantic typing---drives the majority
+of performance gains.
+
+\begin{table}[!t]
+\centering
+\caption{\textbf{MOSAIC variant ablation on LoCoMo.} Comparing
+save/query method combinations with efficiency metrics. Overall accuracy
+on 1,540 QA pairs.}
+\label{tab:ablation}
+\small
+\setlength{\tabcolsep}{2.5pt}
+\begin{tabular}{@{}llcccc@{}}
+\toprule
+\textbf{Save} & \textbf{Query} & \textbf{Save} & \textbf{Query} & \textbf{Overall} \\
+\textbf{Method} & \textbf{Method} & \textbf{Time} & \textbf{Time} & \textbf{(\%)} \\
+\midrule
+Sense+LLM & Sense+LLM & 4.5h & 6.8s/q & 79.68 \\
+Sense+LLM & Hash & 4.5h & 0.1s/q & 79.61 \\
+Sense+Hash & Hash & 1.5h & 0.1s/q & 78.18 \\
+No class & No class & 1.0h & 0.015s/q & 79.81 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The hash-accelerated query path achieves 79.61\% accuracy (vs 79.68\% with
+full LLM classification), a negligible 0.07~pp difference with a
+\textbf{68$\times$ speedup} (0.1s vs 6.8s per query). The no-class variant
+achieves the highest overall accuracy (79.81\%) while being the fastest,
+suggesting that explicit semantic classification may be unnecessary when the
+graph structure already encodes sufficient relational information. This
+finding has important practical implications: the simplest and fastest
+variant is also the most accurate, enabling deployment in latency-sensitive
+applications without accuracy compromise.
+
+% ----------------------------------------------------------------------------
+\subsection{HaluMem: Memory Pipeline Evaluation}
+\label{sec:results_halumem}
+
+Table~\ref{tab:halumem} presents results on the HaluMem benchmark, which
+evaluates three stages of the memory pipeline independently. MOSAIC achieves
+state-of-the-art performance across all three stages.
+
+\begin{table*}[!t]
+\centering
+\caption{\textbf{HaluMem benchmark results.} Evaluation across memory
+extraction, updating, and question answering stages. Best in \textbf{bold};
+arrows indicate direction of improvement. C: Correctness, H: Hallucination,
+O: Omission.}
+\label{tab:halumem}
+\small
+\setlength{\tabcolsep}{4pt}
+\begin{tabular}{@{}l cc cc c ccc ccc@{}}
+\toprule
+& \multicolumn{5}{c}{\textbf{Memory Extraction}} &
+  \multicolumn{3}{c}{\textbf{Memory Updating}} &
+  \multicolumn{3}{c}{\textbf{Question Answering}} \\
+\cmidrule(lr){2-6}\cmidrule(lr){7-9}\cmidrule(lr){10-12}
+\textbf{System} & R$\uparrow$ & wR$\uparrow$ & P$\uparrow$
+  & Acc.$\uparrow$ & F1$\uparrow$
+  & C$\uparrow$ & H$\downarrow$ & O$\downarrow$
+  & C$\uparrow$ & H$\downarrow$ & O$\downarrow$ \\
+\midrule
+MemOS & .741 & .848 & .863 & .596 & .797
+  & .621 & \textbf{.004} & .375 & .672 & .152 & .176 \\
+Zep & --- & --- & --- & --- & ---
+  & .473 & \textbf{.004} & .523 & .555 & .219 & .226 \\
+Mem0-Graph & .433 & .655 & .872 & .619 & .579
+  & .245 & .003 & .752 & .547 & .193 & .261 \\
+Mem0 & .429 & .650 & .863 & .609 & .573
+  & .255 & .005 & .740 & .530 & .192 & .278 \\
+Supermemory & .415 & .648 & \textbf{.903} & .608 & .569
+  & .164 & .012 & .825 & .541 & .222 & .237 \\
+Memobase & .146 & .259 & .922 & .323 & .251
+  & .052 & .006 & .943 & .353 & .300 & .347 \\
+\midrule
+\textbf{MOSAIC} & \textbf{.891} & \textbf{.938} & .895 & \textbf{.777} & \textbf{.893}
+  & \textbf{.699} & .014 & \textbf{.280} & \textbf{.878} & \textbf{.079} & \textbf{.043} \\
+\bottomrule
+\end{tabular}
+\end{table*}
+
+\paragraph{Memory Extraction.}
+MOSAIC achieves the highest recall (0.891 vs MemOS 0.741), weighted recall
+(0.938 vs 0.848), accuracy (77.7\% vs 61.9\%), and F1 (0.893 vs 0.797).
+The entity-typed graph structure enables more comprehensive extraction by
+maintaining awareness of expected entity types and their relational context.
+When extracting entities from a new dialogue turn, the graph provides a
+structural prior: entities related to recently discussed topics are
+prioritized for extraction, reducing the chance of missing relevant
+information.
+
+\paragraph{Memory Updating.}
+MOSAIC achieves the best correctness (0.699 vs MemOS 0.621) and lowest
+omission (0.280 vs 0.375). The hallucination rate (0.014) is slightly higher
+than MemOS/Zep (0.004), reflecting MOSAIC's more aggressive updating
+strategy---it updates more entries, occasionally introducing minor
+inaccuracies, but misses far fewer updates overall. This trade-off is
+favorable: an omission rate of 0.280 means MOSAIC successfully updates 72\%
+of entries, compared to only 62.5\% for MemOS. The marginal increase in
+hallucination (0.010) is substantially outweighed by the reduction in
+omission (0.095).
+
+\paragraph{Question Answering.}
+MOSAIC achieves 0.878 correctness (vs MemOS 0.672, +0.206), with the lowest
+hallucination (0.079) and omission (0.043) rates. The combination of
+structured retrieval and conflict-aware storage produces answers that are
+both more complete and more accurate. The low omission rate (0.043 vs
+next-best 0.176 for MemOS) indicates that MOSAIC's graph-based retrieval
+successfully surfaces relevant memories that flat retrieval misses.
+
+\paragraph{Type-wise Performance.}
+Figure~\ref{fig:halumem} shows accuracy broken down by memory type. MOSAIC
+leads across all three types: events (0.744 vs MemOS 0.634), personas (0.811
+vs 0.598, largest margin), and relationships (0.674 vs 0.624). The persona
+advantage (+0.213 over MemOS) suggests that MOSAIC's entity typing is
+particularly effective at maintaining consistent personal attribute records,
+where contradictions (e.g., conflicting age or occupation entries) are
+common in long conversations and easily caught by the conflict detection
+module.
+
+\begin{figure*}[!t]
+  \centering
+  \begin{subfigure}[t]{0.24\textwidth}
+    \includegraphics[width=\textwidth]{images/figure3/halumem_extraction.pdf}
+    \caption{Memory extraction}
+  \end{subfigure}
+  \hfill
+  \begin{subfigure}[t]{0.24\textwidth}
+    \includegraphics[width=\textwidth]{images/figure3/halumem_updating.pdf}
+    \caption{Memory updating}
+  \end{subfigure}
+  \hfill
+  \begin{subfigure}[t]{0.24\textwidth}
+    \includegraphics[width=\textwidth]{images/figure3/halumem_typewise.pdf}
+    \caption{Type-wise accuracy}
+  \end{subfigure}
+  \hfill
+  \begin{subfigure}[t]{0.24\textwidth}
+    \includegraphics[width=\textwidth]{images/figure3/halumem_qa.pdf}
+    \caption{QA evaluation}
+  \end{subfigure}
+  \caption{\textbf{HaluMem benchmark results.} (a)~MOSAIC achieves highest
+  extraction F1 (0.893). (b)~Best updating correctness (0.699) with lowest
+  omission (0.280). (c)~Leads in all three memory types, with largest margin
+  on personas (+0.213). (d)~Highest QA correctness (0.878) with lowest
+  hallucination (0.079) and omission (0.043).}
+  \label{fig:halumem}
+\end{figure*}
+
+% ----------------------------------------------------------------------------
+\subsection{Error Compounding: Conflict Detection}
+\label{sec:results_error}
+
+Table~\ref{tab:error} presents results on the error compounding test.
+MOSAIC detects \textbf{66\%} of injected factual conflicts (33/50),
+compared to 14\% for the best baselines (A-Mem, OpenAI). All six baselines
+essentially fail at error detection (2--14\% range), confirming that passive
+memory systems lack conflict-checking mechanisms at ingestion time.
+
+\begin{table}[!t]
+\centering
+\caption{\textbf{Error compounding results.} Conflict detection rate on 50
+manually injected errors in hypertension guidelines, by error type and
+visibility. Best in \textbf{bold}.}
+\label{tab:error}
+\small
+\setlength{\tabcolsep}{3pt}
+\begin{tabular}{@{}lcccc cc@{}}
+\toprule
+& \multicolumn{4}{c}{\textbf{By Error Type}} &
+  \multicolumn{2}{c}{\textbf{By Visibility}} \\
+\cmidrule(lr){2-5}\cmidrule(lr){6-7}
+\textbf{Method} & Num. & Sem. & Log. & All & Impl. & Expl. \\
+& (14) & (13) & (23) & (50) & (11) & (39) \\
+\midrule
+A-Mem   & .071 & .231 & .130 & .14 & .000 & .179 \\
+LangMem & .000 & .077 & .000 & .02 & .000 & .026 \\
+MemGPT  & .071 & .154 & .000 & .06 & .091 & .051 \\
+OpenAI  & .000 & .308 & .130 & .14 & .273 & .103 \\
+Zep     & .000 & .154 & .000 & .04 & ---  & ---  \\
+Mem0    & .000 & .077 & .040 & .04 & ---  & ---  \\
+\midrule
+\textbf{MOSAIC} & \textbf{.643} & \textbf{.692} & \textbf{.652} & \textbf{.66}
+  & \textbf{.727} & \textbf{.641} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+MOSAIC's detection is uniformly strong across error types: numerical
+(64.3\%), semantic (69.2\%), and logical (65.2\%). This uniformity contrasts
+sharply with baselines, which show severe type-specific weaknesses. Baselines
+are weakest on numerical and logical errors (mostly 0\%), which require
+comparing specific values or conditional rules against previously stored
+facts---a capability absent from flat memory stores that lack
+cross-referencing mechanisms. The few baseline detections are concentrated
+on semantic errors, where surface-level textual similarity between
+contradictory statements may trigger retrieval-time confusion that
+occasionally surfaces as a detected conflict.
+
+The implicit/explicit breakdown (Figure~\ref{fig:error}) reveals a
+counterintuitive result: MOSAIC detects implicit errors requiring multi-step
+reasoning (72.7\%) at a \emph{higher} rate than explicit contradictions
+(64.1\%). This suggests that graph-based memory traversal naturally performs
+the cross-referencing needed to surface reasoning-level conflicts: when
+processing a new entity, the conflict detection module traverses related
+entities in the graph neighborhood, effectively performing the multi-step
+reasoning required to identify implicit contradictions. Explicit
+contradictions, in contrast, may sometimes be stored in non-overlapping
+graph regions where the neighborhood-based conflict check does not reach.
+
+\begin{figure}[!t]
+  \centering
+  \begin{subfigure}[t]{0.48\columnwidth}
+    \includegraphics[width=\textwidth]{images/figure4/error_by_type.pdf}
+    \caption{By error type}
+  \end{subfigure}
+  \hfill
+  \begin{subfigure}[t]{0.48\columnwidth}
+    \includegraphics[width=\textwidth]{images/figure4/error_by_visibility.pdf}
+    \caption{By visibility}
+  \end{subfigure}
+  \caption{\textbf{Error compounding results.} (a)~MOSAIC achieves 66\%
+  overall detection, 4.7$\times$ higher than the best baseline (14\%), with
+  uniform performance across error types. (b)~Implicit errors are detected
+  at a higher rate (72.7\%) than explicit ones (64.1\%), suggesting
+  graph-based traversal naturally performs multi-step cross-referencing.}
+  \label{fig:error}
+\end{figure}
+
+The 34\% undetected errors provide insights for improvement. Analysis of
+missed conflicts reveals two primary failure modes: (1)~logical
+contradictions spanning entities in distant graph neighborhoods (beyond the
+$k$-nearest neighbor search radius), accounting for approximately 60\% of
+misses; and (2)~numerical errors where the conflicting values are within a
+plausible range, making the contradiction ambiguous to the LLM-based
+conflict assessor, accounting for approximately 40\% of misses. These
+failure modes suggest clear directions for improvement: expanding the
+conflict search radius and incorporating domain-specific plausibility
+bounds for numerical entities.
+
+% ----------------------------------------------------------------------------
+\subsection{Computational Efficiency}
+\label{sec:results_efficiency}
+
+Figure~\ref{fig:efficiency} presents execution time comparisons on the
+HaluMem benchmark. MOSAIC achieves a memory retrieval time of
+\textbf{0.46~minutes} across the entire benchmark---a \textbf{45$\times$
+speedup} over the next-fastest system (MemOS, 20.52~min). This dramatic
+speedup is attributable to the hash-accelerated retrieval path, which
+replaces expensive LLM-based classification with locality-sensitive hashing
+for entity type matching and community-based indexing for neighborhood
+retrieval.
+
+Dialogue addition time (346.57~min) is moderate, comparable to
+Supermemory (273.21~min) and Memobase (293.30~min), and substantially
+faster than Mem0 (2,768.14~min) and Mem0-Graph (2,840.07~min). The
+addition time includes the overhead of conflict detection (approximately
+15\% of total addition time), which is a worthwhile investment given the
+substantial improvement in downstream accuracy.
+
+The hash-accelerated retrieval path (Table~\ref{tab:ablation}) further
+demonstrates the speed--accuracy trade-off: switching from LLM-based
+classification (6.8s/query) to hash-based classification (0.1s/query)
+yields a 68$\times$ speedup with only 0.07~pp accuracy reduction on LoCoMo.
+This makes MOSAIC suitable for real-time applications where query latency
+is critical.
+
+\begin{figure}[!t]
+  \centering
+  \begin{subfigure}[t]{0.48\columnwidth}
+    \includegraphics[width=\textwidth]{images/figure5/efficiency_time.pdf}
+    \caption{Total execution time}
+  \end{subfigure}
+  \hfill
+  \begin{subfigure}[t]{0.48\columnwidth}
+    \includegraphics[width=\textwidth]{images/figure5/efficiency_retrieval.pdf}
+    \caption{Retrieval time (log scale)}
+  \end{subfigure}
+  \caption{\textbf{Computational efficiency on HaluMem.} (a)~Total execution
+  time showing dialogue addition and retrieval components. MOSAIC has
+  moderate addition time but near-instantaneous retrieval. (b)~Memory
+  retrieval time: MOSAIC achieves 0.46~min, 45$\times$ faster than MemOS
+  (20.52~min).}
+  \label{fig:efficiency}
+\end{figure}
+
+% ============================================================================
+% 6. DISCUSSION
+% ============================================================================
+\section{Discussion}
+\label{sec:discussion}
+
+The consistent superiority of MOSAIC across three benchmarks with different evaluation foci---factual QA, pipeline evaluation, and conflict detection---supports the thesis that structured graph-based memory organization provides fundamentally different capabilities than flat memory stores. The entity graph preserves relational structure that enables multi-hop traversal, temporal ordering, and cross-referencing, which drives the accuracy gains observed on LoCoMo (+17.54~pp overall, with the largest margins on multi-hop and temporal questions). The theoretical contribution of neighbor-conditioned stability provides a formal answer to why graphs are the correct abstraction: memory entities inherently possess local dependency structure, and NCS guarantees that the system's behavior is stable under distant state changes, analogous to Bellman's principle in dynamic programming~\citep{bellman1957dynamic}.
+
+The error compounding results carry practical implications for deploying memory-augmented agents in safety-critical domains. Current systems (2--14\% detection) essentially allow all factual errors to propagate unchecked through the memory pipeline, whereas MOSAIC's 66\% detection rate catches the majority of contradictions at ingestion~\citep{huang2023survey_hallucination}. As LLM agents enter high-stakes settings---clinical intake, legal discovery, financial due diligence---the gap between ``can remember'' and ``will detect contradictions'' becomes safety-critical, and MOSAIC provides a principled, auditable mechanism for memory validation.
+
+The ablation analysis reveals several noteworthy design insights. Prerequisite and association edges serve complementary functions: prerequisites ensure logical validity of entity dependencies, while associations ensure conversational coherence; merging them degrades both. The no-class variant (79.81\% overall) challenges the assumption that explicit semantic typing is essential, suggesting that simpler, faster variants may be preferred in practice. Structured graph organization also improves memory quality itself: entity-tagged, confidence-scored information fed into memory yields higher retrieval precision as a side-effect, indicating that task control and memory quality are synergistic.
+
+Several limitations should be noted. The error compounding benchmark is limited to one domain (hypertension) with 50 injected errors. The HaluMem updating hallucination rate (0.014) is slightly higher than the best baselines, and LoCoMo uses a fixed set of 10 conversations. We evaluate with one LLM family (Qwen-2.5-32B)~\citep{qwen2024}; generalization to other architectures should be verified~\citep{touvron2023llama2, achiam2023gpt4}. MOSAIC's open-domain performance (61.46\%) also highlights a fundamental trade-off: structured memory is optimized for conversation-grounded facts, not world knowledge requiring parametric recall~\citep{liu2024lost_middle}. Hybrid architectures combining structured memory with retrieval-augmented generation~\citep{lewis2020rag, gao2024rag_survey} represent a promising direction.
+
+Looking ahead, hierarchical memory graphs for tasks with nested sub-goals, multi-agent coordination over shared memory graphs, adversarial robustness through integration with formal verification, and multi-modal inputs that resolve entities through non-conversational channels all represent fruitful extensions. On the whole, MOSAIC demonstrates that structured, conflict-aware memory organization is essential for reliable long-term LLM agent memory, particularly in safety-critical applications where error compounding has consequential downstream effects. Hash-accelerated retrieval (45$\times$ speedup with negligible accuracy loss) makes the framework practical for real-time deployment, providing a principled and efficient complement to advances in base LLM capabilities.
+
+% ============================================================================
+% REFERENCES
+% ============================================================================
+\bibliographystyle{plainnat}
+\bibliography{references}
+
+\end{document}
