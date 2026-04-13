@@ -84,6 +84,10 @@ mosaic/src/error_case/conflict/results/
 *.lof
 *.lot
 
+# === Untracked data / temp ===
+temp_results/
+dataset/halumem/
+
 # === OS ===
 .DS_Store
 Thumbs.db
