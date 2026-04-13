@@ -1,17 +1,65 @@
 {
   "_comment": "LoCoMo experiment session registry. Add new conversations as they become available.",
   "sessions": [
-    {
+       {
       "conv_id": "conv0",
       "conv_json": "locomo_conv0.json",
       "qa_json": "qa_0.json",
       "num_messages": 419
     },
     {
+      "conv_id": "conv1",
+      "conv_json": "locomo_conv1.json",
+      "qa_json": "qa_1.json",
+      "num_messages": 369
+    },
+    {
+      "conv_id": "conv2",
+      "conv_json": "locomo_conv2.json",
+      "qa_json": "qa_2.json",
+      "num_messages": 663
+    },
+    {
+      "conv_id": "conv3",
+      "conv_json": "locomo_conv3.json",
+      "qa_json": "qa_3.json",
+      "num_messages": 629
+    },
+    {
+      "conv_id": "conv4",
+      "conv_json": "locomo_conv4.json",
+      "qa_json": "qa_4.json",
+      "num_messages": 680
+    },
+    {
+      "conv_id": "conv5",
+      "conv_json": "locomo_conv5.json",
+      "qa_json": "qa_5.json",
+      "num_messages": 675
+    },
+    {
+      "conv_id": "conv6",
+      "conv_json": "locomo_conv6.json",
+      "qa_json": "qa_6.json",
+      "num_messages": 689
+    },
+    {
       "conv_id": "conv7",
       "conv_json": "locomo_conv7.json",
       "qa_json": "qa_7.json",
       "num_messages": 681
+    },
+    {
+      "conv_id": "conv8",
+      "conv_json": "locomo_conv8.json",
+      "qa_json": "qa_8.json",
+      "num_messages": 509
+    },
+    {
+      "conv_id": "conv9",
+      "conv_json": "locomo_conv9.json",
+      "qa_json": "qa_9.json",
+      "num_messages": 568
     }
   ],
   "strategies": ["hybrid", "hash_only"],
