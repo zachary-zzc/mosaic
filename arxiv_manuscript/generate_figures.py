@@ -304,9 +304,9 @@ def gen_figure4():
 
     # --- 4a: By error type ---
     numerical = [0.071, 0.000, 0.071, 0.000, 0.000, 0.000, 0.643]
-    semantic =  [0.231, 0.077, 0.154, 0.308, 0.154, 0.077, 0.692]
+    semantic =  [0.231, 0.077, 0.154, 0.308, 0.077, 0.077, 0.692]
     logical =   [0.130, 0.000, 0.000, 0.130, 0.000, 0.040, 0.652]
-    overall =   [0.14,  0.02,  0.06,  0.14,  0.04,  0.04,  0.66]
+    overall =   [0.14,  0.02,  0.06,  0.14,  0.02,  0.04,  0.66]
 
     fig, ax = plt.subplots(figsize=(7.0, 4.0))
     x = np.arange(len(methods))
@@ -337,35 +337,40 @@ def gen_figure4():
     save_fig(fig, 'figure4', 'error_by_type')
 
     # --- 4b: By visibility ---
-    methods_vis = ['A-Mem', 'LangMem', 'MemGPT', 'OpenAI', 'MOSAIC']
+    methods_vis = ['A-Mem', 'LangMem', 'MemGPT', 'OpenAI', 'Zep', 'Mem0', 'MOSAIC']
     colors_vis = [COLORS['amem'], COLORS['langmem'], COLORS['memgpt'],
-                  COLORS['openai'], COLORS['mosaic']]
-    implicit = [0.000, 0.000, 0.091, 0.273, 0.727]
-    explicit = [0.179, 0.026, 0.051, 0.103, 0.641]
+                  COLORS['openai'], COLORS['zep'], COLORS['mem0'], COLORS['mosaic']]
+    implicit = [0.000, 0.000, 0.091, 0.273, 0, 0, 0.727]
+    explicit = [0.179, 0.026, 0.051, 0.103, 0.026, 0.051, 0.641]
 
-    fig, ax = plt.subplots(figsize=(5.5, 3.8))
+    fig, ax = plt.subplots(figsize=(7, 4))  # 稍微增加宽度以适应更多的柱子
     x = np.arange(len(methods_vis))
     width = 0.32
 
-    b1 = ax.bar(x - width/2, implicit, width, label='Implicit (11)',
+    b1 = ax.bar(x - width / 2, implicit, width, label='Implicit (11)',
                 color='#C44E52', alpha=0.85)
-    b2 = ax.bar(x + width/2, explicit, width, label='Explicit (39)',
+    b2 = ax.bar(x + width / 2, explicit, width, label='Explicit (39)',
                 color='#4C72B0', alpha=0.85)
 
-    b1[-1].set_edgecolor('#B03020'); b1[-1].set_linewidth(1.2)
-    b2[-1].set_edgecolor('#B03020'); b2[-1].set_linewidth(1.2)
+    # 为MOSAIC柱子添加边框（现在索引是6）
+    b1[6].set_edgecolor('#B03020');
+    b1[6].set_linewidth(1.2)
+    b2[6].set_edgecolor('#B03020');
+    b2[6].set_linewidth(1.2)
 
     ax.set_ylabel('Detection Rate')
     ax.set_title('Conflict Detection by Visibility', fontweight='bold')
-    ax.set_xticks(x); ax.set_xticklabels(methods_vis, rotation=35)
+    ax.set_xticks(x);
+    ax.set_xticklabels(methods_vis, rotation=35)
     ax.set_ylim(0, 0.95)
-    fig.subplots_adjust(bottom=0.18)
+    fig.subplots_adjust(bottom=0.18)  # 调整底部边距以适应旋转的标签
     ax.legend(loc='upper left', frameon=False)
 
-    # Add value labels on MOSAIC bars
-    ax.text(4 - width/2, 0.727 + 0.02, '72.7%', ha='center', fontsize=7,
+    # 更新MOSAIC柱子的值标签位置（现在索引是6）
+    mosaic_x = 6
+    ax.text(mosaic_x - width / 2, 0.727 + 0.02, '72.7%', ha='center', fontsize=7,
             fontweight='bold', color=COLORS['mosaic'])
-    ax.text(4 + width/2, 0.641 + 0.02, '64.1%', ha='center', fontsize=7,
+    ax.text(mosaic_x + width / 2, 0.641 + 0.02, '64.1%', ha='center', fontsize=7,
             fontweight='bold', color=COLORS['mosaic'])
 
     save_fig(fig, 'figure4', 'error_by_visibility')
