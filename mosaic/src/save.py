@@ -362,6 +362,10 @@ def save_error(data):
     if total:
         _write_construction_progress(total, total, messages_done=total_msgs, total_messages=total_msgs)
     try:
+        memory.sweep_cross_class_cooccurrence_edges()
+    except Exception as e:
+        _logger.warning("Cross-class edge sweep (error) failed: %s", e)
+    try:
         memory.enrich_dual_graph_edges_post_build()
     except Exception as e:
         _logger.warning("构图(error) 后双图增强失败: %s", e)
@@ -472,6 +476,11 @@ def save(
                 )
         if total:
             _write_construction_progress(total, total, messages_done=total_msgs, total_messages=total_msgs)
+        try:
+            sweep_stats = memory.sweep_cross_class_cooccurrence_edges()
+            _logger.info("Cross-class edge sweep: %s", sweep_stats)
+        except Exception as e:
+            _logger.warning("Cross-class edge sweep failed: %s", e)
         try:
             memory.enrich_dual_graph_edges_post_build()
         except Exception as e:
@@ -604,6 +613,11 @@ def save_hash(
                 )
         if total:
             _write_construction_progress(total, total, messages_done=total_msgs, total_messages=total_msgs)
+        try:
+            sweep_stats = memory.sweep_cross_class_cooccurrence_edges()
+            _logger.info("Cross-class edge sweep (hash): %s", sweep_stats)
+        except Exception as e:
+            _logger.warning("Cross-class edge sweep (hash) failed: %s", e)
         try:
             memory.enrich_dual_graph_edges_post_build()
         except Exception as e:

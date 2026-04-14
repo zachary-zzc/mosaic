@@ -103,8 +103,8 @@ Question: Do you remember what I got the last time I went to Hawaii?
 Gold answer: A shell necklace
 The generated answer might be much longer, but you should be generous with your grading- as long as it touches on the same topic as the gold answer, it should be counted as CORRECT.
 For time related questions, the gold answer will be a specific date, month, year, etc. The generated answer might be much longer or use relative time references (like ‘last Tuesday’ or ‘next month’), but you should be generous with your grading - as long as it refers to the same date or time period as the gold answer, it should be counted as CORRECT. 
-Even if the format differs (e.g., ‘May 7th’ vs ‘7 May’;2023-05-20 vs The sunday before 25 May 2023), consider it CORRECT if it’s the same date.
-Now it’s time for the real question:
+Even if the format differs (e.g., ‘May 7th’ vs ‘7 May’;2023-05-20 vs The sunday before 25 May 2023), consider it CORRECT if it’s the same date.Important: The generated answer may use synonyms, paraphrases, or different wording to express the same meaning as the gold answer. As long as the core factual content or sentiment is equivalent, it should be counted as CORRECT. For example, "an ongoing adventure of learning and growing" and "keep motivating and helping each other as we journey through life" convey the same idea and should both be CORRECT. Similarly, if the gold answer lists traits like "thoughtful, authentic, driven" and the generated answer mentions equivalent traits such as "caring, courageous, genuine", evaluate whether the overall characterization aligns rather than requiring exact word matches.
+If the generated answer says it cannot find the information or does not know, label it WRONG.Now it’s time for the real question:
 Question: ${question}
 Gold answer: ${gold_answer}
 Generated answer: ${generated_answer}

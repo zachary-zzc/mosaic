@@ -671,6 +671,139 @@ class ClassGraph:
 
         self.save_graph_snapshot()
 
+    def sweep_cross_class_cooccurrence_edges(self) -> dict[str, int]:
+        """
+        Post-build sweep: create E_P edges for cross-class instances that share
+        the same message_label but were never linked during per-batch
+        ``update_class_relationships`` (because the other instance didn't exist
+        yet when the batch ran).
+
+        Also patches the ``functions`` field so that neighbor expansion in
+        ``_build_instance_adjacency`` sees the new links.
+
+        Returns stats dict with ``edges_added``, ``pairs_linked``, ``skipped``.
+        """
+        from collections import defaultdict
+
+        stats = {"edges_added": 0, "pairs_linked": 0, "skipped": 0}
+
+        # 1. Build label → [(class_node, instance_dict)] mapping across the
+        #    full graph (all batches completed).
+        label_to_instances: dict[Any, list[tuple]] = defaultdict(list)
+        for class_node in self.graph.nodes:
+            if not hasattr(class_node, "_instances") or not class_node._instances:
+                continue
+            for inst in class_node._instances:
+                for lab in inst.get("message_labels") or []:
+                    label_to_instances[_message_label_key(lab)].append(
+                        (class_node, inst)
+                    )
+
+        # 2. Build set of already-linked (instance_key, instance_key) pairs to
+        #    avoid duplicate edges.
+        existing_pairs: set[tuple[str, str]] = set()
+        for rec in self.edges or []:
+            if rec.get("edge_leg") != EDGE_LEG_PRAGMATIC:
+                continue
+            conns = rec.get("connections") or []
+            keys = []
+            for c in conns:
+                cid = c.get("class_id")
+                iid = c.get("instance_id")
+                if cid and iid is not None:
+                    keys.append(self._instance_key(str(cid), iid))
+            for a in range(len(keys)):
+                for b in range(a + 1, len(keys)):
+                    pair = tuple(sorted([keys[a], keys[b]]))
+                    existing_pairs.add(pair)
+
+        # 3. For each label shared by ≥2 instances in *different* classes,
+        #    create an E_P edge record if not already present.
+        for lab_key, entries in label_to_instances.items():
+            if len(entries) < 2:
+                continue
+            # group by class to detect cross-class
+            by_class: dict[str, list] = defaultdict(list)
+            for cn, inst in entries:
+                by_class[getattr(cn, "class_id", "")].append((cn, inst))
+            if len(by_class) < 2:
+                continue  # all intra-class — already handled per-batch
+
+            # Collect all (class_node, instance) in this label
+            all_entries = entries
+            # Build connection list and check for new pairs
+            new_connections = []
+            new_keys = []
+            for cn, inst in all_entries:
+                cid = getattr(cn, "class_id", "")
+                iid = inst.get("instance_id")
+                if not cid or iid is None:
+                    continue
+                new_connections.append({"class_id": cid, "instance_id": iid})
+                new_keys.append(self._instance_key(cid, iid))
+
+            if len(new_keys) < 2:
+                continue
+
+            # Check if ANY new cross-class pair would be added
+            has_new = False
+            for a in range(len(new_keys)):
+                for b in range(a + 1, len(new_keys)):
+                    pair = tuple(sorted([new_keys[a], new_keys[b]]))
+                    if pair not in existing_pairs:
+                        has_new = True
+                        break
+                if has_new:
+                    break
+            if not has_new:
+                stats["skipped"] += 1
+                continue
+
+            edge_record = {
+                "edge_leg": EDGE_LEG_PRAGMATIC,
+                "content": f"[post-build sweep] co-occurrence on message label {lab_key}",
+                "label": lab_key,
+                "connections": new_connections,
+            }
+            self.edges.append(edge_record)
+            self._apply_edge_record_to_dual_nx(edge_record)
+            stats["edges_added"] += 1
+
+            # Patch functions field for neighbor expansion
+            for a in range(len(all_entries)):
+                cn_a, inst_a = all_entries[a]
+                if "functions" not in inst_a:
+                    inst_a["functions"] = []
+                for b in range(len(all_entries)):
+                    if a == b:
+                        continue
+                    cn_b, inst_b = all_entries[b]
+                    cid_a = getattr(cn_a, "class_id", "")
+                    cid_b = getattr(cn_b, "class_id", "")
+                    if cid_a == cid_b:
+                        continue  # skip intra-class (already linked)
+                    fn_info = {
+                        "class_id": cid_b,
+                        "instance_id": inst_b.get("instance_id"),
+                        "content": f"[sweep] co-occurrence label {lab_key}",
+                    }
+                    if fn_info not in inst_a["functions"]:
+                        inst_a["functions"].append(fn_info)
+                        stats["pairs_linked"] += 1
+
+            # Update existing_pairs to avoid duplicate edges for other labels
+            for a in range(len(new_keys)):
+                for b in range(a + 1, len(new_keys)):
+                    existing_pairs.add(tuple(sorted([new_keys[a], new_keys[b]])))
+
+        _logger.info(
+            "Post-build cross-class edge sweep: %d edges added, %d function pairs linked, %d skipped",
+            stats["edges_added"],
+            stats["pairs_linked"],
+            stats["skipped"],
+        )
+        return stats
+
     def enrich_dual_graph_edges_post_build(self) -> dict[str, Any]:
         """
         构图全批次结束后：BGE 建 E_A、可选 LLM 非对称先决 E_P（DAG 安全），并刷新快照 / EntityGraph。
