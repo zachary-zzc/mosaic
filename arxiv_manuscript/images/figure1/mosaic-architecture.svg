@@ -1,0 +1,179 @@
+<?xml version="1.0" standalone="no"?>
+<svg id="mosaic-arch" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 780 700" width="780" height="700" style="font-family: 'Times New Roman', Times, Georgia, serif;">
+  <defs>
+    <marker id="arw" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="5" orient="auto-start-reverse">
+      <path d="M1,1.5 L9,5 L1,8.5" fill="none" stroke="#475569" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>
+    </marker>
+    <marker id="arwR" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="5" orient="auto-start-reverse">
+      <path d="M1,1.5 L9,5 L1,8.5" fill="none" stroke="#B45309" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>
+    </marker>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#FDFDFE"/><stop offset="100%" stop-color="#F8FAFC"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="780" height="700" fill="url(#bg)" rx="4" stroke="#E2E8F0" stroke-width="0.5"/>
+
+  <!-- Title -->
+  <text x="390" y="32" text-anchor="middle" font-size="18" font-weight="bold" fill="#1E293B" font-style="italic">Figure 1.</text>
+  <text x="390" y="54" text-anchor="middle" font-size="14" fill="#475569">MOSAIC System Architecture — Conflict-Aware Structured Memory Pipeline</text>
+
+  <!-- ROW 1: Input -->
+  <rect x="30" y="74" width="720" height="52" rx="4" fill="white" stroke="#94A3B8" stroke-width="1"/>
+  <text x="390" y="96" text-anchor="middle" font-size="16" font-weight="bold" fill="#1E293B">Multi-turn Dialogue Input</text>
+  <text x="390" y="116" text-anchor="middle" font-size="13" fill="#64748B" font-style="italic">(u₁, a₁), (u₂, a₂), …, (uₜ, aₜ)</text>
+
+  <!-- Arrow -->
+  <line x1="390" y1="126" x2="390" y2="148" stroke="#475569" stroke-width="1.2" marker-end="url(#arw)"/>
+
+  <!-- ROW 2: Extraction -->
+  <rect x="30" y="150" width="720" height="44" rx="4" fill="#EFF6FF" stroke="#3B82F6" stroke-width="1"/>
+  <text x="390" y="178" text-anchor="middle" font-size="16" font-weight="bold" fill="#1E40AF">Entity Extraction</text>
+
+  <!-- Split arrows -->
+  <line x1="260" y1="194" x2="200" y2="232" stroke="#475569" stroke-width="1.2" marker-end="url(#arw)"/>
+  <line x1="520" y1="194" x2="580" y2="232" stroke="#475569" stroke-width="1.2" marker-end="url(#arw)"/>
+
+  <!-- ROW 3: Dual Classification -->
+  <rect x="30" y="236" width="345" height="52" rx="4" fill="#EEF2FF" stroke="#6366F1" stroke-width="1"/>
+  <text x="202" y="260" text-anchor="middle" font-size="15" font-weight="bold" fill="#3730A3">LLM Classification</text>
+  <text x="202" y="278" text-anchor="middle" font-size="12" fill="#6366F1" font-style="italic">Highest accuracy · slower</text>
+
+  <rect x="405" y="236" width="345" height="52" rx="4" fill="#FFFBEB" stroke="#D97706" stroke-width="1"/>
+  <text x="577" y="260" text-anchor="middle" font-size="15" font-weight="bold" fill="#92400E">Heuristic Hash Path (LSH)</text>
+  <text x="577" y="278" text-anchor="middle" font-size="12" fill="#B45309" font-style="italic">68× speedup · near-parity accuracy</text>
+
+  <!-- OR connector -->
+  <rect x="366" y="250" width="48" height="22" rx="11" fill="white" stroke="#CBD5E1" stroke-width="1"/>
+  <text x="390" y="266" text-anchor="middle" font-size="13" font-weight="bold" fill="#64748B">OR</text>
+
+  <!-- Merge arrows -->
+  <line x1="200" y1="288" x2="330" y2="316" stroke="#475569" stroke-width="1" marker-end="url(#arw)"/>
+  <line x1="580" y1="288" x2="450" y2="316" stroke="#475569" stroke-width="1" marker-end="url(#arw)"/>
+
+  <!-- Type label bar -->
+  <rect x="195" y="310" width="390" height="30" rx="15" fill="#F1F5F9" stroke="#CBD5E1" stroke-width="0.8"/>
+  <text x="390" y="330" text-anchor="middle" font-size="13" fill="#475569" font-style="italic">τ ∈ { τ₁, τ₂, τ₃, … } e.g. Event, Persona, Relationship, …</text>
+
+  <line x1="390" y1="340" x2="390" y2="368" stroke="#475569" stroke-width="1.2" marker-end="url(#arw)"/>
+
+  <!-- ROW 4: Graph Panel -->
+  <rect x="25" y="372" width="420" height="232" rx="5" fill="white" stroke="#7C3AED" stroke-width="1.2"/>
+  <text x="235" y="396" text-anchor="middle" font-size="16" font-weight="bold" fill="#5B21B6">Entity-Typed Memory Graph</text>
+  <text x="235" y="414" text-anchor="middle" font-size="12" fill="#8B5CF6" font-style="italic">G = (V, E, τ)  ·  Leiden communities  ·  NCS dirty flags</text>
+
+  <!-- Community ellipses -->
+  <ellipse cx="150" cy="510" rx="85" ry="52" fill="#2563EB" fill-opacity="0.04" stroke="#2563EB" stroke-width="0.6" stroke-dasharray="4,3"/>
+  <text x="150" y="458" text-anchor="middle" font-size="11" fill="#93C5FD" font-style="italic">Community A</text>
+  <ellipse cx="325" cy="510" rx="85" ry="52" fill="#16A34A" fill-opacity="0.04" stroke="#16A34A" stroke-width="0.6" stroke-dasharray="4,3"/>
+  <text x="325" y="458" text-anchor="middle" font-size="11" fill="#86EFAC" font-style="italic">Community B</text>
+
+  <!-- Community A nodes -->
+  <circle cx="100" cy="492" r="9" fill="#2563EB" fill-opacity="0.15" stroke="#2563EB" stroke-width="1.5"/>
+  <circle cx="100" cy="492" r="4" fill="#2563EB"/>
+  <circle cx="140" cy="512" r="9" fill="#2563EB" fill-opacity="0.15" stroke="#2563EB" stroke-width="1.5"/>
+  <circle cx="140" cy="512" r="4" fill="#2563EB"/>
+  <circle cx="185" cy="487" r="9" fill="#16A34A" fill-opacity="0.15" stroke="#16A34A" stroke-width="1.5"/>
+  <circle cx="185" cy="487" r="4" fill="#16A34A"/>
+  <circle cx="115" cy="537" r="9" fill="#DC2626" fill-opacity="0.15" stroke="#DC2626" stroke-width="1.5"/>
+  <circle cx="115" cy="537" r="4" fill="#DC2626"/>
+  <circle cx="175" cy="532" r="9" fill="#D97706" fill-opacity="0.15" stroke="#D97706" stroke-width="1.5"/>
+  <circle cx="175" cy="532" r="4" fill="#D97706"/>
+
+  <line x1="100" y1="492" x2="140" y2="512" stroke="#CBD5E1" stroke-width="1"/>
+  <line x1="140" y1="512" x2="185" y2="487" stroke="#CBD5E1" stroke-width="1"/>
+  <line x1="100" y1="492" x2="115" y2="537" stroke="#CBD5E1" stroke-width="1"/>
+  <line x1="115" y1="537" x2="175" y2="532" stroke="#CBD5E1" stroke-width="0.8" stroke-dasharray="4,3"/>
+  <line x1="185" y1="487" x2="175" y2="532" stroke="#CBD5E1" stroke-width="1"/>
+
+  <!-- Community B nodes -->
+  <circle cx="275" cy="497" r="9" fill="#2563EB" fill-opacity="0.15" stroke="#2563EB" stroke-width="1.5"/>
+  <circle cx="275" cy="497" r="4" fill="#2563EB"/>
+  <circle cx="320" cy="492" r="9" fill="#16A34A" fill-opacity="0.15" stroke="#16A34A" stroke-width="1.5"/>
+  <circle cx="320" cy="492" r="4" fill="#16A34A"/>
+  <circle cx="365" cy="517" r="9" fill="#DC2626" fill-opacity="0.15" stroke="#DC2626" stroke-width="1.5"/>
+  <circle cx="365" cy="517" r="4" fill="#DC2626"/>
+  <circle cx="290" cy="532" r="9" fill="#D97706" fill-opacity="0.15" stroke="#D97706" stroke-width="1.5"/>
+  <circle cx="290" cy="532" r="4" fill="#D97706"/>
+  <circle cx="345" cy="540" r="9" fill="#2563EB" fill-opacity="0.15" stroke="#2563EB" stroke-width="1.5"/>
+  <circle cx="345" cy="540" r="4" fill="#2563EB"/>
+
+  <line x1="275" y1="497" x2="320" y2="492" stroke="#CBD5E1" stroke-width="1"/>
+  <line x1="320" y1="492" x2="365" y2="517" stroke="#CBD5E1" stroke-width="1"/>
+  <line x1="365" y1="517" x2="345" y2="540" stroke="#CBD5E1" stroke-width="1"/>
+  <line x1="290" y1="532" x2="345" y2="540" stroke="#CBD5E1" stroke-width="0.8" stroke-dasharray="4,3"/>
+  <line x1="275" y1="497" x2="290" y2="532" stroke="#CBD5E1" stroke-width="1"/>
+
+  <!-- Cross-community dashed -->
+  <line x1="185" y1="487" x2="275" y2="497" stroke="#94A3B8" stroke-width="0.8" stroke-dasharray="5,3"/>
+  <line x1="175" y1="532" x2="290" y2="532" stroke="#94A3B8" stroke-width="0.8" stroke-dasharray="5,3"/>
+
+  <!-- Conflict edge -->
+  <line x1="185" y1="487" x2="320" y2="492" stroke="#DC2626" stroke-width="1.8" stroke-dasharray="5,3"/>
+  <text x="252" y="480" text-anchor="middle" font-size="16" fill="#DC2626">⚡</text>
+
+  <!-- Graph legend -->
+  <line x1="42" y1="584" x2="65" y2="584" stroke="#475569" stroke-width="1"/>
+  <text x="71" y="588" font-size="11" fill="#64748B">Prereq.</text>
+  <line x1="120" y1="584" x2="143" y2="584" stroke="#94A3B8" stroke-width="0.8" stroke-dasharray="4,3"/>
+  <text x="149" y="588" font-size="11" fill="#64748B">Assoc.</text>
+  <line x1="196" y1="584" x2="219" y2="584" stroke="#DC2626" stroke-width="1.5" stroke-dasharray="4,3"/>
+  <text x="225" y="588" font-size="11" fill="#DC2626">Conflict</text>
+
+  <circle cx="286" cy="584" r="5" fill="#2563EB" fill-opacity="0.2" stroke="#2563EB" stroke-width="1.2"/>
+  <circle cx="286" cy="584" r="2.5" fill="#2563EB"/>
+  <text x="295" y="588" font-size="11" fill="#64748B">τ₁</text>
+  <circle cx="322" cy="584" r="5" fill="#16A34A" fill-opacity="0.2" stroke="#16A34A" stroke-width="1.2"/>
+  <circle cx="322" cy="584" r="2.5" fill="#16A34A"/>
+  <text x="331" y="588" font-size="11" fill="#64748B">τ₂</text>
+  <circle cx="358" cy="584" r="5" fill="#DC2626" fill-opacity="0.2" stroke="#DC2626" stroke-width="1.2"/>
+  <circle cx="358" cy="584" r="2.5" fill="#DC2626"/>
+  <text x="367" y="588" font-size="11" fill="#64748B">τ₃</text>
+  <circle cx="394" cy="584" r="5" fill="#D97706" fill-opacity="0.2" stroke="#D97706" stroke-width="1.2"/>
+  <circle cx="394" cy="584" r="2.5" fill="#D97706"/>
+  <text x="403" y="588" font-size="11" fill="#64748B">…</text>
+
+  <!-- Conflict Detection Panel -->
+  <rect x="465" y="372" width="290" height="232" rx="5" fill="#FFFBF0" stroke="#D97706" stroke-width="1.2"/>
+  <text x="610" y="396" text-anchor="middle" font-size="16" font-weight="bold" fill="#92400E">Conflict Detection</text>
+  <text x="610" y="414" text-anchor="middle" font-size="12" fill="#B45309" font-style="italic">Active validation at save time</text>
+
+  <rect x="490" y="432" width="240" height="36" rx="4" fill="white" stroke="#FBBF24" stroke-width="0.8"/>
+  <text x="610" y="455" text-anchor="middle" font-size="14" fill="#78350F" font-weight="bold">k-NN Neighbor Retrieval</text>
+  <line x1="610" y1="468" x2="610" y2="486" stroke="#B45309" stroke-width="1" marker-end="url(#arwR)"/>
+
+  <rect x="490" y="488" width="240" height="44" rx="4" fill="white" stroke="#FBBF24" stroke-width="0.8"/>
+  <text x="610" y="506" text-anchor="middle" font-size="14" fill="#78350F" font-weight="bold">LLM Conflict Assessment</text>
+  <text x="610" y="524" text-anchor="middle" font-size="12" fill="#B45309" font-style="italic">Numerical · Semantic · Logical</text>
+  <line x1="610" y1="532" x2="610" y2="550" stroke="#B45309" stroke-width="1" marker-end="url(#arwR)"/>
+
+  <rect x="490" y="552" width="240" height="36" rx="4" fill="white" stroke="#FBBF24" stroke-width="0.8"/>
+  <text x="610" y="575" text-anchor="middle" font-size="14" fill="#78350F" font-weight="bold">Resolution</text>
+
+  <!-- Resolution icons -->
+  <circle cx="535" cy="598" r="8" fill="#DCFCE7" stroke="#22C55E" stroke-width="1"/>
+  <text x="535" y="602" text-anchor="middle" font-size="11" fill="#16A34A" font-weight="bold">✓</text>
+  <text x="555" y="602" font-size="12" fill="#475569">Update</text>
+
+  <circle cx="610" cy="598" r="8" fill="#FEE2E2" stroke="#EF4444" stroke-width="1"/>
+  <text x="610" y="602" text-anchor="middle" font-size="11" fill="#DC2626" font-weight="bold">✗</text>
+  <text x="630" y="602" font-size="12" fill="#475569">Reject</text>
+
+  <circle cx="685" cy="598" r="8" fill="#FEF3C7" stroke="#EAB308" stroke-width="1"/>
+  <text x="685" y="602" text-anchor="middle" font-size="11" fill="#CA8A04" font-weight="bold">!</text>
+  <text x="705" y="602" font-size="12" fill="#475569">Flag</text>
+
+  <!-- Arrow down -->
+  <line x1="390" y1="604" x2="390" y2="630" stroke="#475569" stroke-width="1.2" marker-end="url(#arw)"/>
+
+  <!-- ROW 5: Retrieval -->
+  <rect x="25" y="634" width="420" height="48" rx="4" fill="#F0FDFA" stroke="#14B8A6" stroke-width="1"/>
+  <text x="235" y="655" text-anchor="middle" font-size="15" font-weight="bold" fill="#115E59">Community-Aware Retrieval</text>
+  <text x="235" y="673" text-anchor="middle" font-size="12" fill="#14B8A6" font-style="italic">HNSW index  ·  top-k  ·  multi-hop traversal</text>
+
+  <!-- Scoring box -->
+  <rect x="465" y="634" width="290" height="48" rx="4" fill="white" stroke="#CBD5E1" stroke-width="0.8"/>
+  <text x="610" y="655" text-anchor="middle" font-size="14" font-weight="bold" fill="#334155">Node Scoring</text>
+  <text x="610" y="673" text-anchor="middle" font-size="14" fill="#64748B" font-style="italic">S(v) = α·Ĩ(v) + β·T(v) + γ·C(v)</text>
+
+</svg>
