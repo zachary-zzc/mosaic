@@ -642,13 +642,20 @@ and Memobase~\citep{memobase_2024}.
 \subsection{Implementation Details}
 \label{sec:implementation}
 
-All experiments use Qwen-2.5-32B~\citep{qwen2024, yang2024qwen2} as the base
-LLM for both MOSAIC and all baselines, ensuring fair comparison. Entity
-embeddings use all-MiniLM-L6-v2~\citep{reimers2019sentence} with $d = 384$
-dimensions. The association graph threshold is $\theta = 0.4$, and the
-confidence gating threshold is $\rho_{\min} = 0.6$. Scoring weights are
-$\alpha = 0.5$, $\beta = 0.3$, $\gamma = 0.2$. Memory retrieval uses
-top-$m = 5$ neighbors.
+Across all three benchmarks (LoCoMo, HaluMem, and the Error Compounding
+Test), MOSAIC uses Qwen-Max-2025-01-25 as the base LLM for memory
+construction and retrieval. Baseline results are drawn from their
+respective original publications: LoCoMo baselines are cited from the
+Mem0 paper~\citep{chhikara2025mem0}, HaluMem baselines are cited from
+the HaluMem paper~\citep{chen2025halumem}, and Error Compounding Test
+baselines are obtained from our own experiments using GPT-4o.
+For the HaluMem evaluation stage (LLM-as-Judge scoring), we employ
+DeepSeek-R1 as the judge model.
+Entity embeddings use all-MiniLM-L6-v2~\citep{reimers2019sentence} with
+$d = 384$ dimensions. The association graph threshold is $\theta = 0.4$,
+and the confidence gating threshold is $\rho_{\min} = 0.6$. Scoring
+weights are $\alpha = 0.5$, $\beta = 0.3$, $\gamma = 0.2$. Memory
+retrieval uses top-$m = 5$ neighbors.
 
 % ============================================================================
 % 5. RESULTS
