@@ -113,8 +113,8 @@ conflict detection, error compounding, conversational QA
 The proliferation of memory-augmented LLM agents has created an implicit
 assumption: that an agent which remembers is an agent that reasons correctly
 over its memories. Systems such as MemGPT~\citep{packer2023memgpt},
-Mem0~\citep{mem0_2024}, A-Mem~\citep{amem_2024}, and
-MemOS~\citep{memos_2024} have demonstrated impressive retention of user
+Mem0~\citep{chhikara2025mem0}, A-Mem~\citep{xu2025mem}, and
+MemOS~\citep{li2025memos} have demonstrated impressive retention of user
 preferences, factual history, and contextual nuance across sessions. Yet a
 fundamental limitation persists: these systems treat memory as
 \emph{append-only storage}, ingesting new information without validating it
@@ -125,7 +125,7 @@ This \emph{error compounding} problem is particularly acute in
 safety-critical domains. In clinical settings, silently storing that a
 patient's target blood pressure is $<$160/100~mmHg when guidelines specify
 $<$130/80~mmHg propagates into incorrect risk stratification and potentially
-harmful prescribing~\citep{sharma2024nature_medicine}. In legal and financial
+harmful prescribing~\citep{yaraghi2024generative}. In legal and financial
 contexts, contradictory facts feed contradictory retrievals, which feed
 contradictory downstream decisions. The pipeline structure of modern memory
 systems---from extraction to storage to retrieval to
@@ -136,7 +136,7 @@ A growing body of evidence reveals a deeper disconnect between \emph{recall}
 and \emph{task completion}: memory-augmented agents routinely terminate
 conversations prematurely, miss required information, or drift into tangential
 topics when no explicit mechanism enforces systematic
-coverage~\citep{xi2023rise, wang2024survey_agents}. Current agent
+coverage~\citep{xi2025rise, wang2024survey}. Current agent
 frameworks provide two capabilities: \emph{action selection} (choosing what
 to do next) and \emph{memory} (storing what was learned). But structured
 information-gathering tasks require a third: \emph{task-state tracking}---a
@@ -195,14 +195,14 @@ belief state, and priority require re-evaluation only when at least one of
 its graph neighbors has changed state. When the local neighborhood is
 unchanged, the node's state is guaranteed stable. This principle is closely
 analogous to Bellman's principle of optimality in dynamic
-programming~\citep{bellman1957dynamic}, which decomposes a global
+programming~\citep{bellman1966dynamic}, which decomposes a global
 optimization into local value updates that propagate through a
 state-transition graph. Just as dynamic programming avoids redundant
 global recomputation by exploiting local structure, MOSAIC avoids redundant
 re-evaluation of entity priorities by exploiting the dependency and
 association structure encoded in the memory graph.
 
-We evaluate MOSAIC on three complementary benchmarks: LoCoMo~\citep{locomo_2024}, which tests long-conversation memory QA across 1,540 question--answer pairs; HaluMem~\citep{halumem_2024}, which separately evaluates memory extraction, updating, and question answering with hallucination detection; and a novel error compounding test in which 50 factual conflicts are manually injected into hypertension clinical guidelines. Across these benchmarks, MOSAIC achieves 79.7\% overall accuracy on LoCoMo (+17.5~pp over the best baseline Mem0), an extraction F1 of 0.893 and QA correctness of 0.878 on HaluMem, and detects 66\% of injected factual conflicts---4.7$\times$ higher than the best baseline (14\%)---while hash-accelerated retrieval provides a 45$\times$ speedup over the next-fastest system with negligible accuracy loss.
+We evaluate MOSAIC on three complementary benchmarks: LoCoMo~\citep{maharana2024evaluating}, which tests long-conversation memory QA across 1,540 question--answer pairs; HaluMem~\citep{chen2025halumem}, which separately evaluates memory extraction, updating, and question answering with hallucination detection; and a novel error compounding test in which 50 factual conflicts are manually injected into hypertension clinical guidelines. Across these benchmarks, MOSAIC achieves 79.7\% overall accuracy on LoCoMo (+17.5~pp over the best baseline Mem0), an extraction F1 of 0.893 and QA correctness of 0.878 on HaluMem, and detects 66\% of injected factual conflicts---4.7$\times$ higher than the best baseline (14\%)---while hash-accelerated retrieval provides a 45$\times$ speedup over the next-fastest system with negligible accuracy loss.
 
 % ============================================================================
 % 2. RELATED WORK
@@ -216,19 +216,19 @@ The development of persistent memory for LLM agents has progressed rapidly.
 MemGPT~\citep{packer2023memgpt} introduces OS-inspired virtual memory
 management, maintaining a tiered memory hierarchy (main context, archival
 storage, recall storage) with explicit memory management functions.
-Mem0~\citep{mem0_2024} provides multi-level persistent memory with adaptive
+Mem0~\citep{chhikara2025mem0} provides multi-level persistent memory with adaptive
 personalization across user, session, and agent levels.
-A-Mem~\citep{amem_2024} implements adaptive memory with automatic storage,
+A-Mem~\citep{xu2025mem} implements adaptive memory with automatic storage,
 retrieval, and summarization, dynamically adjusting memory granularity.
-MemOS~\citep{memos_2024} unifies memory operations through an
+MemOS~\citep{li2025memos} unifies memory operations through an
 operating-system abstraction layer. LangMem~\citep{langmem_2024} offers
 language-model-based memory management within the LangChain ecosystem.
-Zep~\citep{zep_2024} provides production-grade memory with temporal awareness
+Zep~\citep{rasmussen2025zep} provides production-grade memory with temporal awareness
 for AI assistants. Supermemory~\citep{supermemory_2024} and
 Memobase~\citep{memobase_2024} offer scalable memory solutions for
 large-scale agent deployments.
 
-A comprehensive survey by \citet{zhang2024survey_memory} categorizes memory
+A comprehensive survey by \citet{zhang2025survey} categorizes memory
 mechanisms along dimensions of storage format, retrieval strategy, and
 management policy. Despite this diversity, all existing systems share a common
 limitation: they focus on \emph{retention}---ensuring that information, once
@@ -239,16 +239,16 @@ information from being stored in the first place.
 \subsection{Agent Frameworks and Planning}
 
 The broader landscape of LLM agent architectures provides context for
-MOSAIC's design choices. ReAct~\citep{yao2023react} interleaves reasoning
+MOSAIC's design choices. ReAct~\citep{yao2022react} interleaves reasoning
 and acting, using chain-of-thought prompting to decide actions step by step.
 Reflexion~\citep{shinn2023reflexion} adds verbal reinforcement learning
 through self-reflective feedback loops. Plan-and-Solve~\citep{wang2023plan}
 improves zero-shot reasoning through explicit plan generation before
 execution. These frameworks demonstrate sophisticated planning and reasoning
 capabilities but lack persistent, structured memory for cross-session
-information management~\citep{xi2023rise, wang2024survey_agents}.
+information management~\citep{xi2025rise, wang2024survey}.
 
-Tool-augmented approaches~\citep{schick2024toolformer} extend agents with
+Tool-augmented approaches~\citep{schick2023toolformer} extend agents with
 external capabilities but do not address the fundamental memory organization
 problem. Chain-of-thought prompting~\citep{wei2022chain} improves reasoning
 within a single context window but does not support long-term memory across
@@ -258,7 +258,7 @@ sessions.
 
 Several systems organize agent memory as knowledge
 graphs~\citep{pan2024unifying}. Mem0-Graph extends Mem0 with graph
-structure but does not perform conflict checking. GraphRAG~\citep{graphrag2024}
+structure but does not perform conflict checking. GraphRAG~\citep{edge2024local}
 uses graph-based retrieval for query-focused summarization, demonstrating the
 benefit of graph structure for information retrieval. However, these systems
 focus on retrieval quality rather than ingestion-time validation.
@@ -272,20 +272,20 @@ simultaneously optimize.
 
 \subsection{Memory Evaluation Benchmarks}
 
-LoCoMo~\citep{locomo_2024} evaluates long-conversation memory through
+LoCoMo~\citep{maharana2024evaluating} evaluates long-conversation memory through
 multi-type QA spanning single-hop, multi-hop, temporal, and open-domain
-questions. HaluMem~\citep{halumem_2024} introduces hallucination-aware
+questions. HaluMem~\citep{chen2025halumem} introduces hallucination-aware
 evaluation of the memory pipeline, separately assessing extraction, updating,
 and question answering stages. LLM-as-Judge
-approaches~\citep{zheng2024judging} supplement reference-based evaluation. Our
+approaches~\citep{zheng2023judging} supplement reference-based evaluation. Our
 error compounding test complements these by specifically targeting conflict
 detection, a capability not evaluated by existing benchmarks.
 
 \subsection{Hallucination and Factual Consistency}
 
 The hallucination problem in LLMs has been extensively
-studied~\citep{huang2023survey_hallucination, ji2023hallucination}. Fact
-verification systems~\citep{thorne2018fact} and fine-grained factual
+studied~\citep{huang2025survey, ji2023survey}. Fact
+verification systems~\citep{thorne2018fever} and fine-grained factual
 evaluation~\citep{min2023factscore} address hallucination at generation time.
 MOSAIC addresses a complementary problem: preventing hallucinated or
 contradictory information from being stored in persistent memory, where it
@@ -437,7 +437,7 @@ community as the most recently queried entity, promoting topically coherent
 conversation flow.
 
 Community structure is detected by applying the Leiden
-algorithm~\citep{traag2019leiden} to $G_A$ at initialization.
+algorithm~\citep{traag2019louvain} to $G_A$ at initialization.
 
 \subsection{Conflict Detection at Save Time}
 \label{sec:conflict_detection}
@@ -497,7 +497,7 @@ MOSAIC supports two classification paths for entity typing and retrieval:
     highest accuracy at 6.8s per query (save time: $\sim$4.5h per 100k
     tokens).
   \item \textbf{Heuristic path}: Locality-sensitive
-    hashing~\citep{indyk1998lsh} for near-instantaneous classification at
+    hashing~\citep{indyk1998approximate} for near-instantaneous classification at
     0.1s per query (save time: $\sim$1.5h per 100k tokens), with only
     1.5~pp accuracy reduction.
 \end{itemize}
@@ -511,12 +511,12 @@ sufficient relational information even without explicit type labels.
 \label{sec:retrieval}
 
 For memory retrieval, MOSAIC leverages the graph structure through
-community detection (Leiden algorithm~\citep{traag2019leiden}) over the entity
+community detection (Leiden algorithm~\citep{traag2019louvain}) over the entity
 graph. Given a query, the system identifies the most relevant community,
 retrieves entities within that community using embedding similarity, and
 traverses graph edges to collect contextually related entities. This
 structure-aware retrieval enables multi-hop reasoning that flat semantic
-search cannot support~\citep{lewis2020rag, gao2024rag_survey}.
+search cannot support~\citep{lewis2020retrieval, gao2023retrieval}.
 
 \subsection{Long-Term Memory Integration}
 \label{sec:memory_integration}
@@ -541,7 +541,7 @@ potential clarification through the NCS mechanism.
 \label{sec:convergence}
 
 We establish convergence properties of MOSAIC through connections to
-submodular optimization~\citep{nemhauser1978submodular}.
+submodular optimization~\citep{nemhauser1978analysis}.
 
 \begin{theorem}[Submodularity of Coverage]
 \label{thm:submodularity}
@@ -572,15 +572,15 @@ with efficient local computation, even as the memory graph grows.
 \label{sec:benchmarks}
 
 \paragraph{LoCoMo.}
-The LoCoMo benchmark~\citep{locomo_2024} evaluates long-conversation memory
+The LoCoMo benchmark~\citep{maharana2024evaluating} evaluates long-conversation memory
 through 1,540 QA pairs derived from 10 extended conversations. Questions
 span four categories: single-hop (841), multi-hop (282), open-domain (96),
 and temporal (321). Each question requires retrieving and reasoning over
 information from specific conversation turns. We use the LLM-as-Judge
-evaluation protocol~\citep{zheng2024judging} to assess answer correctness.
+evaluation protocol~\citep{zheng2023judging} to assess answer correctness.
 
 \paragraph{HaluMem.}
-The HaluMem benchmark~\citep{halumem_2024} evaluates three stages of the
+The HaluMem benchmark~\citep{chen2025halumem} evaluates three stages of the
 memory pipeline independently: (1)~memory extraction (recall, precision,
 F1), (2)~memory updating (correctness, hallucination rate, omission rate),
 and (3)~question answering (correctness, hallucination, omission). It
@@ -621,21 +621,21 @@ We compare against a comprehensive set of memory systems evaluated across
 all three benchmarks where applicable:
 
 \begin{itemize}[noitemsep,topsep=3pt]
-  \item \textbf{A-Mem}~\citep{amem_2024}: Adaptive memory with automatic
+  \item \textbf{A-Mem}~\citep{xu2025mem}: Adaptive memory with automatic
     storage, retrieval, and summarization.
   \item \textbf{LangMem}~\citep{langmem_2024}: Language-model-based memory
     management within the LangChain ecosystem.
-  \item \textbf{Zep}~\citep{zep_2024}: Production memory system with
+  \item \textbf{Zep}~\citep{rasmussen2025zep}: Production memory system with
     temporal awareness and entity extraction.
   \item \textbf{OpenAI Memory}: Built-in conversational memory from
-    OpenAI~\citep{achiam2023gpt4}.
-  \item \textbf{Mem0}~\citep{mem0_2024}: Multi-level memory (user, session,
+    OpenAI~\citep{achiam2023gpt}.
+  \item \textbf{Mem0}~\citep{chhikara2025mem0}: Multi-level memory (user, session,
     agent) with adaptive personalization.
   \item \textbf{MemGPT}~\citep{packer2023memgpt}: Tiered memory with
     OS-inspired virtual context management.
 \end{itemize}
 
-For HaluMem, additional baselines include MemOS~\citep{memos_2024},
+For HaluMem, additional baselines include MemOS~\citep{li2025memos},
 Mem0-Graph (Mem0 with graph extension), Supermemory~\citep{supermemory_2024},
 and Memobase~\citep{memobase_2024}.
 
@@ -706,7 +706,7 @@ relationships that flat memory systems lose when chunking conversation
 history. Questions requiring temporal reasoning (e.g., ``What did the user
 say about X before mentioning Y?'') benefit from the graph's ability to
 traverse temporal edges directly rather than reconstructing temporal order
-from retrieved text fragments~\citep{liu2024lost_middle}.
+from retrieved text fragments~\citep{liu2024lost}.
 
 Open-domain questions are the sole category where MOSAIC does not lead
 (61.46\% vs Zep 76.60\%), reflecting that structured memory organization is
@@ -1061,13 +1061,13 @@ is critical.
 \section{Discussion}
 \label{sec:discussion}
 
-The consistent superiority of MOSAIC across three benchmarks with different evaluation foci---factual QA, pipeline evaluation, and conflict detection---supports the thesis that structured graph-based memory organization provides fundamentally different capabilities than flat memory stores. The entity graph preserves relational structure that enables multi-hop traversal, temporal ordering, and cross-referencing, which drives the accuracy gains observed on LoCoMo (+17.54~pp overall, with the largest margins on multi-hop and temporal questions). The theoretical contribution of neighbor-conditioned stability provides a formal answer to why graphs are the correct abstraction: memory entities inherently possess local dependency structure, and NCS guarantees that the system's behavior is stable under distant state changes, analogous to Bellman's principle in dynamic programming~\citep{bellman1957dynamic}.
+The consistent superiority of MOSAIC across three benchmarks with different evaluation foci---factual QA, pipeline evaluation, and conflict detection---supports the thesis that structured graph-based memory organization provides fundamentally different capabilities than flat memory stores. The entity graph preserves relational structure that enables multi-hop traversal, temporal ordering, and cross-referencing, which drives the accuracy gains observed on LoCoMo (+17.54~pp overall, with the largest margins on multi-hop and temporal questions). The theoretical contribution of neighbor-conditioned stability provides a formal answer to why graphs are the correct abstraction: memory entities inherently possess local dependency structure, and NCS guarantees that the system's behavior is stable under distant state changes, analogous to Bellman's principle in dynamic programming~\citep{bellman1966dynamic}.
 
-The error compounding results carry practical implications for deploying memory-augmented agents in safety-critical domains. Current systems (2--14\% detection) essentially allow all factual errors to propagate unchecked through the memory pipeline, whereas MOSAIC's 66\% detection rate catches the majority of contradictions at ingestion~\citep{huang2023survey_hallucination}. As LLM agents enter high-stakes settings---clinical intake, legal discovery, financial due diligence---the gap between ``can remember'' and ``will detect contradictions'' becomes safety-critical, and MOSAIC provides a principled, auditable mechanism for memory validation.
+The error compounding results carry practical implications for deploying memory-augmented agents in safety-critical domains. Current systems (2--14\% detection) essentially allow all factual errors to propagate unchecked through the memory pipeline, whereas MOSAIC's 66\% detection rate catches the majority of contradictions at ingestion~\citep{huang2025survey}. As LLM agents enter high-stakes settings---clinical intake, legal discovery, financial due diligence---the gap between ``can remember'' and ``will detect contradictions'' becomes safety-critical, and MOSAIC provides a principled, auditable mechanism for memory validation.
 
 The ablation analysis reveals several noteworthy design insights. Prerequisite and association edges serve complementary functions: prerequisites ensure logical validity of entity dependencies, while associations ensure conversational coherence; merging them degrades both. The untyped variant (79.81\% overall) challenges the assumption that explicit entity type classification is essential, suggesting that simpler, faster variants may be preferred in practice. Structured graph organization also improves memory quality itself: entity-tagged, confidence-scored information fed into memory yields higher retrieval precision as a side-effect, indicating that task control and memory quality are synergistic.
 
-Several limitations should be noted. The error compounding benchmark is limited to one domain (hypertension) with 50 injected errors. The HaluMem evaluation uses a single sample from the HaluMem-Medium dataset rather than averaging across all 20~samples as in the original benchmark; while baseline results are cited from the original paper under the full-dataset setting, the comparison is asymmetric and results should be interpreted with this caveat in mind. The HaluMem updating hallucination rate (0.014) is slightly higher than the best baselines, and LoCoMo uses a fixed set of 10 conversations. We evaluate with one LLM family (Qwen-2.5-32B)~\citep{qwen2024}; generalization to other architectures should be verified~\citep{touvron2023llama2, achiam2023gpt4}. MOSAIC's open-domain performance (61.46\%) also highlights a fundamental trade-off: structured memory is optimized for conversation-grounded facts, not world knowledge requiring parametric recall~\citep{liu2024lost_middle}. Hybrid architectures combining structured memory with retrieval-augmented generation~\citep{lewis2020rag, gao2024rag_survey} represent a promising direction.
+Several limitations should be noted. The error compounding benchmark is limited to one domain (hypertension) with 50 injected errors. The HaluMem updating hallucination rate (0.014) is slightly higher than the best baselines, and LoCoMo uses a fixed set of 10 conversations. We evaluate with one LLM family (Qwen-2.5-32B)~\citep{qwen2024}; generalization to other architectures should be verified~\citep{touvron2023llama2, achiam2023gpt4}. MOSAIC's open-domain performance (61.46\%) also highlights a fundamental trade-off: structured memory is optimized for conversation-grounded facts, not world knowledge requiring parametric recall~\citep{liu2024lost_middle}. Hybrid architectures combining structured memory with retrieval-augmented generation~\citep{lewis2020rag, gao2024rag_survey} represent a promising direction.
 
 Looking ahead, hierarchical memory graphs for tasks with nested sub-goals, multi-agent coordination over shared memory graphs, adversarial robustness through integration with formal verification, and multi-modal inputs that resolve entities through non-conversational channels all represent fruitful extensions. On the whole, MOSAIC demonstrates that structured, conflict-aware memory organization is essential for reliable long-term LLM agent memory, particularly in safety-critical applications where error compounding has consequential downstream effects. Hash-accelerated retrieval (45$\times$ speedup with negligible accuracy loss) makes the framework practical for real-time deployment, providing a principled and efficient complement to advances in base LLM capabilities.
 
