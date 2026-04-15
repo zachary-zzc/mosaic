@@ -9,6 +9,7 @@ from src.logger import setup_logger
 from src.data.instance import (
     create_instances_from_messages,
     create_instances_from_messages_hash,
+    enrich_instances_with_inferred_facts,
     merge_canonical_message_labels,
     update_data_from_messages,
 )
@@ -353,6 +354,17 @@ class ClassNode:
                         for instance in part:
                             merge_canonical_message_labels(instance, [msg_item])
                         new_instances.extend(part)
+
+                # --- Option 1: LLM inference enrichment (hybrid only) ---
+                if new_instances:
+                    try:
+                        enrich_instances_with_inferred_facts(new_instances, messages, _class_node)
+                    except Exception as e:
+                        _logger.warning(
+                            "类 %s 推理增强失败，跳过: %s",
+                            getattr(_class_node, "class_id", "?"),
+                            e,
+                        )
 
             for instance in new_instances:
                 instance["instance_id"] = f"instance_{current_instance_count + 1}"

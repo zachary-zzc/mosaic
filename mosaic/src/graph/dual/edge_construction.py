@@ -101,6 +101,82 @@ def add_semantic_association_edges_bge(cg: Any, cfg: Any) -> dict[str, int]:
     return stats
 
 
+def ensure_minimum_connectivity(cg: Any, cfg: Any) -> dict[str, int]:
+    """
+    Post-construction pass: connect isolated entities (degree 0 in both G_p
+    and G_a) to their nearest neighbor by embedding similarity, ignoring the
+    ``semantic_min_similarity`` threshold.
+
+    This prevents retrieval dead-ends where neighbor expansion can never reach
+    an isolated entity.  Uses the BGE embedding cache populated by
+    ``add_semantic_association_edges_bge``.
+    """
+    import numpy as np
+
+    stats: dict[str, int] = {"isolated_found": 0, "edges_added": 0}
+
+    emb_cache: dict[str, np.ndarray] | None = getattr(cg, "_bge_embedding_cache", None)
+    if not emb_cache or len(emb_cache) < 2:
+        return stats
+
+    # Nodes present in either dual graph → connected
+    connected: set[str] = set()
+    gp = getattr(cg, "G_p", None)
+    ga = getattr(cg, "G_a", None)
+    if gp is not None:
+        connected.update(gp.nodes())
+    if ga is not None:
+        connected.update(ga.nodes())
+
+    # Isolated = in embedding cache but absent from both dual graphs
+    all_ids = list(emb_cache.keys())
+    isolated = [eid for eid in all_ids if eid not in connected]
+    if not isolated:
+        return stats
+
+    stats["isolated_found"] = len(isolated)
+    _logger.info("Minimum connectivity: %d isolated entities found", len(isolated))
+
+    # Build target pool: entities that ARE connected
+    targets = [eid for eid in all_ids if eid in connected]
+    if not targets:
+        return stats
+
+    target_emb = np.stack([emb_cache[eid] for eid in targets])
+    existing_a = _existing_a_pairs(cg)
+
+    for iso_eid in isolated:
+        iso_emb = emb_cache[iso_eid].reshape(1, -1)
+        sims = (iso_emb @ target_emb.T).flatten()
+        best_idx = int(np.argmax(sims))
+        best_eid = targets[best_idx]
+        best_sim = float(sims[best_idx])
+
+        a, b = (iso_eid, best_eid) if iso_eid <= best_eid else (best_eid, iso_eid)
+        if (a, b) in existing_a:
+            continue
+
+        try:
+            rec = edge_record_associative_pair(
+                iso_eid,
+                best_eid,
+                weight=best_sim,
+                provenance={"similarity": best_sim, "kind": "minimum_connectivity"},
+            )
+            _append_edge_record(cg, rec)
+            existing_a.add((a, b))
+            stats["edges_added"] += 1
+        except Exception as e:
+            _logger.debug("Minimum connectivity skip %s: %s", iso_eid, e)
+
+    _logger.info(
+        "Minimum connectivity: added %d edges for %d isolated entities",
+        stats["edges_added"],
+        stats["isolated_found"],
+    )
+    return stats
+
+
 def _prerequisite_candidate_pairs(
     cg: Any,
     cfg: Any,
@@ -229,6 +305,7 @@ def enrich_class_graph_dual_edges(cg: Any, *, llm: Any | None = None) -> dict[st
 
     if cfg.semantic_a_enabled:
         report["edge_construction"]["semantic_bge"] = add_semantic_association_edges_bge(cg, cfg)
+        report["edge_construction"]["minimum_connectivity"] = ensure_minimum_connectivity(cg, cfg)
     if cfg.prerequisite_llm_enabled:
         report["edge_construction"]["prerequisite_llm"] = add_llm_prerequisite_edges(
             cg, llm or getattr(cg, "_llm", None), cfg

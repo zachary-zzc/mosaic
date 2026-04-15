@@ -147,7 +147,7 @@ def get_query_neighbor_traversal_config() -> tuple[int, int, frozenset[str]]:
 
     配置节 ``[QUERY]``：
     - neighbor_hops：最大跳数，默认 1
-    - neighbor_max_extra：最多追加的邻域实例数，默认 16
+    - neighbor_max_extra：最多追加的邻域实例数，默认 48
     - neighbor_edge_legs：``ALL``、``P``、``A`` 或逗号分隔 ``P,A``（与 dual_graph 中 E_P/E_A 一致）
 
     环境变量（可选）：MOSAIC_QUERY_NEIGHBOR_HOPS、MOSAIC_QUERY_NEIGHBOR_MAX_EXTRA、MOSAIC_QUERY_NEIGHBOR_EDGE_LEGS
@@ -156,11 +156,11 @@ def get_query_neighbor_traversal_config() -> tuple[int, int, frozenset[str]]:
 
     config = load_api_config()
     hops = 1
-    max_extra = 16
+    max_extra = 48
     legs_raw = "ALL"
     if config.has_section("QUERY"):
         hops = config.getint("QUERY", "neighbor_hops", fallback=1)
-        max_extra = config.getint("QUERY", "neighbor_max_extra", fallback=16)
+        max_extra = config.getint("QUERY", "neighbor_max_extra", fallback=48)
         legs_raw = config.get("QUERY", "neighbor_edge_legs", fallback="ALL").strip() or "ALL"
 
     eh = os.environ.get("MOSAIC_QUERY_NEIGHBOR_HOPS", "").strip()
@@ -187,6 +187,27 @@ def get_query_neighbor_traversal_config() -> tuple[int, int, frozenset[str]]:
         legs = frozenset(chosen if chosen else ALL_EDGE_LEGS)
 
     return hops, max_extra, legs
+
+
+def get_query_neighbor_mmr_lambda() -> float:
+    """
+    MMR diversity parameter for neighbor expansion ranking.
+
+    1.0 = pure relevance (original behavior), 0.0 = pure diversity.
+    Default 0.5.  Config: ``[QUERY] neighbor_mmr_lambda``.
+    Env: ``MOSAIC_QUERY_NEIGHBOR_MMR_LAMBDA``.
+    """
+    config = load_api_config()
+    val = 0.5
+    if config.has_section("QUERY"):
+        val = config.getfloat("QUERY", "neighbor_mmr_lambda", fallback=0.5)
+    env = os.environ.get("MOSAIC_QUERY_NEIGHBOR_MMR_LAMBDA", "").strip()
+    if env:
+        try:
+            val = float(env)
+        except ValueError:
+            pass
+    return max(0.0, min(1.0, val))
 
 
 def get_embedding_model_path() -> str:

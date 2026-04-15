@@ -148,7 +148,7 @@ out of things that are easy to ask.''
 
 This distinction is not merely an engineering detail. In clinical intake, a
 missed medication history propagates into incorrect risk stratification and
-potentially harmful prescribing~\citep{singhal2023medpalm}. In insurance
+potentially harmful prescribing~\citep{singhal2023large}. In insurance
 claims processing, a missing liability determination invalidates downstream
 adjudication. In technical support, an undiagnosed hardware failure leads to
 repeated software-only fixes. The common structure across these domains is a
@@ -221,12 +221,9 @@ personalization across user, session, and agent levels.
 A-Mem~\citep{xu2025mem} implements adaptive memory with automatic storage,
 retrieval, and summarization, dynamically adjusting memory granularity.
 MemOS~\citep{li2025memos} unifies memory operations through an
-operating-system abstraction layer. LangMem~\citep{langmem_2024} offers
-language-model-based memory management within the LangChain ecosystem.
+operating-system abstraction layer.
 Zep~\citep{rasmussen2025zep} provides production-grade memory with temporal awareness
-for AI assistants. Supermemory~\citep{supermemory_2024} and
-Memobase~\citep{memobase_2024} offer scalable memory solutions for
-large-scale agent deployments.
+for AI assistants.
 
 A comprehensive survey by \citet{zhang2025survey} categorizes memory
 mechanisms along dimensions of storage format, retrieval strategy, and
@@ -297,24 +294,16 @@ can compound across future retrieval and reasoning steps.
 \section{Method}
 \label{sec:method}
 
-% Placeholder for pipeline/architecture figure
 \begin{figure*}[!t]
   \centering
-  \fbox{\parbox{0.95\textwidth}{\centering\vspace{2cm}
-    \textbf{[Pipeline \& Architecture Diagram]}\\[6pt]
-    Placeholder for Figure~1: MOSAIC system architecture showing the
-    dual-path memory pipeline (LLM classification path and hash-accelerated
-    path), entity graph construction, conflict detection module, and
-    retrieval mechanism.
-  \vspace{2cm}}}
-  \caption{\textbf{MOSAIC system architecture.} Incoming dialogue is
-  processed through entity extraction and semantic classification (with
-  optional hash acceleration). Extracted entities are organized into a
-  typed memory graph with event, persona, and relationship nodes. During
-  ingestion, the conflict detection module cross-references new entities
-  against existing graph neighbors, flagging contradictions for update or
-  deletion. Retrieval operates over the graph structure using community-aware
-  traversal.}
+  \includegraphics[width=0.95\textwidth]{images/figure1/mosaic-architecture.png}
+  \caption{\textbf{MOSAIC system architecture.} Dialogue is processed
+  through entity extraction and dual-path classification via LLM or
+  locality-sensitive hashing. Entities populate a typed memory graph with
+  prerequisite and association edges. At ingestion, the conflict detection
+  module validates new facts against graph neighbors, resolving
+  contradictions before storage. Community-aware retrieval enables multi-hop
+  reasoning over graph structure.}
   \label{fig:pipeline}
 \end{figure*}
 
@@ -623,8 +612,6 @@ all three benchmarks where applicable:
 \begin{itemize}[noitemsep,topsep=3pt]
   \item \textbf{A-Mem}~\citep{xu2025mem}: Adaptive memory with automatic
     storage, retrieval, and summarization.
-  \item \textbf{LangMem}~\citep{langmem_2024}: Language-model-based memory
-    management within the LangChain ecosystem.
   \item \textbf{Zep}~\citep{rasmussen2025zep}: Production memory system with
     temporal awareness and entity extraction.
   \item \textbf{OpenAI Memory}: Built-in conversational memory from
@@ -635,9 +622,8 @@ all three benchmarks where applicable:
     OS-inspired virtual context management.
 \end{itemize}
 
-For HaluMem, additional baselines include MemOS~\citep{li2025memos},
-Mem0-Graph (Mem0 with graph extension), Supermemory~\citep{supermemory_2024},
-and Memobase~\citep{memobase_2024}.
+For HaluMem, additional baselines include MemOS~\citep{li2025memos}
+and Mem0-Graph (Mem0 with graph extension).
 
 \subsection{Implementation Details}
 \label{sec:implementation}
@@ -1074,7 +1060,7 @@ The error compounding results carry practical implications for deploying memory-
 
 The ablation analysis reveals several noteworthy design insights. Prerequisite and association edges serve complementary functions: prerequisites ensure logical validity of entity dependencies, while associations ensure conversational coherence; merging them degrades both. The untyped variant (79.81\% overall) challenges the assumption that explicit entity type classification is essential, suggesting that simpler, faster variants may be preferred in practice. Structured graph organization also improves memory quality itself: entity-tagged, confidence-scored information fed into memory yields higher retrieval precision as a side-effect, indicating that task control and memory quality are synergistic.
 
-Several limitations should be noted. The error compounding benchmark is limited to one domain (hypertension) with 50 injected errors. The HaluMem updating hallucination rate (0.014) is slightly higher than the best baselines, and LoCoMo uses a fixed set of 10 conversations. We evaluate with one LLM family (Qwen-2.5-32B)~\citep{qwen2024}; generalization to other architectures should be verified~\citep{touvron2023llama2, achiam2023gpt4}. MOSAIC's open-domain performance (61.46\%) also highlights a fundamental trade-off: structured memory is optimized for conversation-grounded facts, not world knowledge requiring parametric recall~\citep{liu2024lost_middle}. Hybrid architectures combining structured memory with retrieval-augmented generation~\citep{lewis2020rag, gao2024rag_survey} represent a promising direction.
+Several limitations should be noted. The error compounding benchmark is limited to one domain (hypertension) with 50 injected errors. The HaluMem updating hallucination rate (0.014) is slightly higher than the best baselines, and LoCoMo uses a fixed set of 10 conversations. We evaluate with one LLM family (Qwen-2.5-32B); generalization to other architectures should be verified~\citep{touvron2023llama, achiam2023gpt}. MOSAIC's open-domain performance (61.46\%) also highlights a fundamental trade-off: structured memory is optimized for conversation-grounded facts, not world knowledge requiring parametric recall~\citep{liu2024lost}. Hybrid architectures combining structured memory with retrieval-augmented generation~\citep{lewis2020retrieval, gao2023retrieval} represent a promising direction.
 
 Looking ahead, hierarchical memory graphs for tasks with nested sub-goals, multi-agent coordination over shared memory graphs, adversarial robustness through integration with formal verification, and multi-modal inputs that resolve entities through non-conversational channels all represent fruitful extensions. On the whole, MOSAIC demonstrates that structured, conflict-aware memory organization is essential for reliable long-term LLM agent memory, particularly in safety-critical applications where error compounding has consequential downstream effects. Hash-accelerated retrieval (45$\times$ speedup with negligible accuracy loss) makes the framework practical for real-time deployment, providing a principled and efficient complement to advances in base LLM capabilities.
 

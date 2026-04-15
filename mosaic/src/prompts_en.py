@@ -159,6 +159,25 @@ JSON object with:
 - `label`: (number or string) The unique label ID corresponding to this context message
 """
 
+PROMPT_INFER_IMPLICIT_FACTS = """
+You are a knowledge inference engine. Given conversation messages and the category they belong to, infer **implicit facts** that are strongly implied but never explicitly stated.
+
+**JSON** (required keyword for API JSON mode.)
+
+Category: ${class_name}
+Messages:
+${messages}
+
+## Rules
+1. Only infer facts that are **strongly supported** by the messages — do NOT hallucinate.
+2. Focus on: medical conditions implied by symptoms, relationships implied by context, locations implied by events, time periods implied by references, causes/effects, professional roles implied by activities.
+3. Each inferred fact should be a concise sentence.
+4. If nothing can be reliably inferred, return an empty list.
+
+Return:
+{"inferred_facts": ["fact 1", "fact 2", ...]}
+"""
+
 PROMPT_CREATE_INSTANCE = """
 You create structured instances from class context and messages (temporal awareness: parse explicit/implicit times). Ignore greetings; keep facts, events, entities.
 

@@ -10,6 +10,7 @@ from typing import Dict, List, Any, Tuple
 
 from src.config_loader import (
     get_embedding_model_path,
+    get_query_neighbor_mmr_lambda,
     get_query_neighbor_traversal_config,
     get_query_retrieval_config,
 )
@@ -671,12 +672,19 @@ class ClassGraph:
 
         self.save_graph_snapshot()
 
-    def sweep_cross_class_cooccurrence_edges(self) -> dict[str, int]:
+    def sweep_cross_class_cooccurrence_edges(
+        self, *, min_shared_labels: int = 2
+    ) -> dict[str, int]:
         """
         Post-build sweep: create E_P edges for cross-class instances that share
-        the same message_label but were never linked during per-batch
+        message_labels but were never linked during per-batch
         ``update_class_relationships`` (because the other instance didn't exist
         yet when the batch ran).
+
+        ``min_shared_labels`` (default 2) controls how many distinct message
+        labels two instances must share before an edge is created.  A value
+        of 1 reverts to the original behaviour (link on any single
+        co-occurrence) but tends to produce too many spurious edges.
 
         Also patches the ``functions`` field so that neighbor expansion in
         ``_build_instance_adjacency`` sees the new links.
@@ -717,8 +725,12 @@ class ClassGraph:
                     pair = tuple(sorted([keys[a], keys[b]]))
                     existing_pairs.add(pair)
 
-        # 3. For each label shared by ≥2 instances in *different* classes,
-        #    create an E_P edge record if not already present.
+        # 3. Build instance-pair → shared-label-count mapping for the
+        #    min_shared_labels filter.
+        #    instance key tuple (sorted) → set of label keys they co-occur on
+        inst_key_for = {}  # id(inst) → instance_key  (cache)
+        pair_shared: dict[tuple[str, str], set] = defaultdict(set)
+
         for lab_key, entries in label_to_instances.items():
             if len(entries) < 2:
                 continue
@@ -727,74 +739,105 @@ class ClassGraph:
             for cn, inst in entries:
                 by_class[getattr(cn, "class_id", "")].append((cn, inst))
             if len(by_class) < 2:
-                continue  # all intra-class — already handled per-batch
+                continue  # all intra-class — skip
 
-            # Collect all (class_node, instance) in this label
-            all_entries = entries
-            # Build connection list and check for new pairs
-            new_connections = []
-            new_keys = []
-            for cn, inst in all_entries:
+            keys_in_label: list[tuple[str, Any]] = []  # (inst_key, (cn, inst))
+            for cn, inst in entries:
                 cid = getattr(cn, "class_id", "")
                 iid = inst.get("instance_id")
                 if not cid or iid is None:
                     continue
-                new_connections.append({"class_id": cid, "instance_id": iid})
-                new_keys.append(self._instance_key(cid, iid))
+                ik = self._instance_key(cid, iid)
+                inst_key_for[id(inst)] = ik
+                keys_in_label.append((ik, (cn, inst)))
 
-            if len(new_keys) < 2:
+            # record cross-class co-occurrence
+            for a in range(len(keys_in_label)):
+                ka, (cn_a, _) = keys_in_label[a]
+                cid_a = getattr(cn_a, "class_id", "")
+                for b in range(a + 1, len(keys_in_label)):
+                    kb, (cn_b, _) = keys_in_label[b]
+                    cid_b = getattr(cn_b, "class_id", "")
+                    if cid_a == cid_b:
+                        continue
+                    pair = tuple(sorted([ka, kb]))
+                    pair_shared[pair].add(lab_key)
+
+        # 4. For each cross-class pair meeting the min_shared_labels
+        #    threshold, create an E_P edge record if not already present.
+        #    First, collect qualified instance keys grouped by their shared
+        #    labels for batching edge records.
+
+        # Build a fast lookup: instance_key → (class_node, inst_dict)
+        key_to_entry: dict[str, tuple] = {}
+        for class_node in self.graph.nodes:
+            if not hasattr(class_node, "_instances") or not class_node._instances:
                 continue
+            cid = getattr(class_node, "class_id", "")
+            for inst in class_node._instances:
+                iid = inst.get("instance_id")
+                if iid is None:
+                    continue
+                key_to_entry[self._instance_key(cid, iid)] = (class_node, inst)
 
-            # Check if ANY new cross-class pair would be added
-            has_new = False
-            for a in range(len(new_keys)):
-                for b in range(a + 1, len(new_keys)):
-                    pair = tuple(sorted([new_keys[a], new_keys[b]]))
-                    if pair not in existing_pairs:
-                        has_new = True
-                        break
-                if has_new:
-                    break
-            if not has_new:
+        for pair, shared_labs in pair_shared.items():
+            if len(shared_labs) < min_shared_labels:
+                stats["skipped"] += 1
+                continue
+            if pair in existing_pairs:
                 stats["skipped"] += 1
                 continue
 
+            ka, kb = pair
+            entry_a = key_to_entry.get(ka)
+            entry_b = key_to_entry.get(kb)
+            if entry_a is None or entry_b is None:
+                continue
+
+            cn_a, inst_a = entry_a
+            cn_b, inst_b = entry_b
+            cid_a = getattr(cn_a, "class_id", "")
+            cid_b = getattr(cn_b, "class_id", "")
+            iid_a = inst_a.get("instance_id")
+            iid_b = inst_b.get("instance_id")
+
+            lab_desc = ",".join(sorted(shared_labs)[:3])
             edge_record = {
                 "edge_leg": EDGE_LEG_PRAGMATIC,
-                "content": f"[post-build sweep] co-occurrence on message label {lab_key}",
-                "label": lab_key,
-                "connections": new_connections,
+                "content": f"[post-build sweep] co-occurrence on {len(shared_labs)} labels: {lab_desc}",
+                "label": lab_desc,
+                "connections": [
+                    {"class_id": cid_a, "instance_id": iid_a},
+                    {"class_id": cid_b, "instance_id": iid_b},
+                ],
             }
             self.edges.append(edge_record)
             self._apply_edge_record_to_dual_nx(edge_record)
             stats["edges_added"] += 1
+            existing_pairs.add(pair)
 
             # Patch functions field for neighbor expansion
+            all_entries = [entry_a, entry_b]
             for a in range(len(all_entries)):
-                cn_a, inst_a = all_entries[a]
-                if "functions" not in inst_a:
-                    inst_a["functions"] = []
+                cn_a_f, inst_a_f = all_entries[a]
+                if "functions" not in inst_a_f:
+                    inst_a_f["functions"] = []
                 for b in range(len(all_entries)):
                     if a == b:
                         continue
-                    cn_b, inst_b = all_entries[b]
-                    cid_a = getattr(cn_a, "class_id", "")
-                    cid_b = getattr(cn_b, "class_id", "")
-                    if cid_a == cid_b:
+                    cn_b_f, inst_b_f = all_entries[b]
+                    cid_a_f = getattr(cn_a_f, "class_id", "")
+                    cid_b_f = getattr(cn_b_f, "class_id", "")
+                    if cid_a_f == cid_b_f:
                         continue  # skip intra-class (already linked)
                     fn_info = {
-                        "class_id": cid_b,
-                        "instance_id": inst_b.get("instance_id"),
-                        "content": f"[sweep] co-occurrence label {lab_key}",
+                        "class_id": cid_b_f,
+                        "instance_id": inst_b_f.get("instance_id"),
+                        "content": f"[sweep] co-occurrence {len(shared_labs)} labels",
                     }
-                    if fn_info not in inst_a["functions"]:
-                        inst_a["functions"].append(fn_info)
+                    if fn_info not in inst_a_f["functions"]:
+                        inst_a_f["functions"].append(fn_info)
                         stats["pairs_linked"] += 1
-
-            # Update existing_pairs to avoid duplicate edges for other labels
-            for a in range(len(new_keys)):
-                for b in range(a + 1, len(new_keys)):
-                    existing_pairs.add(tuple(sorted([new_keys[a], new_keys[b]])))
 
         _logger.info(
             "Post-build cross-class edge sweep: %d edges added, %d function pairs linked, %d skipped",
@@ -1043,10 +1086,16 @@ class ClassGraph:
             "G_a_edges": self.G_a.number_of_edges(),
         }
 
-    def _neighbor_expansion_key_list(self, seeds: set[str]) -> list[str]:
+    def _neighbor_expansion_key_list(
+        self, seeds: set[str], query: str | None = None
+    ) -> list[str]:
         max_hops, max_extra, legs = get_query_neighbor_traversal_config()
         if max_hops <= 0 or max_extra <= 0 or not seeds:
             return []
+        if query is not None:
+            return self._neighbor_bfs_ranked(
+                seeds, max_hops, max_extra, legs, query
+            )
         return self._neighbor_bfs_keys(seeds, max_hops, max_extra, legs)
 
     def _build_instance_adjacency(self, allowed_legs: frozenset[str]) -> dict[str, set[str]]:
@@ -1136,6 +1185,129 @@ class ClassGraph:
 
         return collected
 
+    def _neighbor_bfs_ranked(
+        self,
+        seeds: set[str],
+        max_hops: int,
+        max_extra: int,
+        allowed_legs: frozenset[str],
+        query: str,
+    ) -> list[str]:
+        """
+        Collect ALL reachable neighbors within *max_hops*, then rank them using
+        MMR (Maximal Marginal Relevance) to balance relevance **and** diversity.
+
+        Pure TF-IDF ranking biases toward same-topic neighbors, which hurts
+        multi-hop queries requiring cross-topic bridging.  MMR iteratively
+        selects candidates that are relevant to the query while penalising
+        redundancy with already-selected neighbors.
+
+        The trade-off is controlled by ``[QUERY] neighbor_mmr_lambda``
+        (default 0.5; 1.0 = pure relevance = old behaviour).
+        """
+        if max_hops <= 0 or max_extra <= 0 or not seeds:
+            return []
+        adj = self._build_instance_adjacency(allowed_legs)
+        if not adj:
+            return []
+
+        # BFS to find ALL reachable non-seed neighbours within max_hops
+        visited: dict[str, int] = {s: 0 for s in seeds}
+        q: deque[tuple[str, int]] = deque((s, 0) for s in seeds)
+        candidates: list[str] = []
+
+        while q:
+            u, d = q.popleft()
+            if d >= max_hops:
+                continue
+            for v in adj.get(u, ()):
+                if v in visited:
+                    continue
+                nd = d + 1
+                visited[v] = nd
+                q.append((v, nd))
+                if v not in seeds and nd <= max_hops:
+                    candidates.append(v)
+
+        if not candidates:
+            return []
+        if len(candidates) <= max_extra:
+            return candidates  # no need to score
+
+        # Build instance_key → instance_dict lookup
+        key_to_inst: dict[str, dict] = {}
+        for class_node in self.graph.nodes:
+            cid = getattr(class_node, "class_id", None) or ""
+            if not cid:
+                continue
+            for inst in getattr(class_node, "_instances", []) or []:
+                iid = inst.get("instance_id")
+                if iid is None:
+                    continue
+                key_to_inst[self._instance_key(cid, iid)] = inst
+
+        # Build text representations for each candidate
+        texts: list[str] = []
+        valid_keys: list[str] = []
+        for ck in candidates:
+            inst = key_to_inst.get(ck)
+            if inst is None:
+                continue
+            parts = [tx for _ty, tx in build_instance_fragments(inst) if (tx or "").strip()]
+            texts.append("\n".join(parts) if parts else " ")
+            valid_keys.append(ck)
+
+        if not texts:
+            return candidates[:max_extra]
+
+        # Score by TF-IDF similarity to query
+        similarities, _, tfidf_matrix = calculate_tfidf_similarity(query, texts)
+
+        mmr_lambda = get_query_neighbor_mmr_lambda()
+        if mmr_lambda >= 1.0:
+            # Pure relevance — original behaviour
+            scored = sorted(
+                zip(valid_keys, similarities), key=lambda x: x[1], reverse=True
+            )
+            return [k for k, _ in scored[:max_extra]]
+
+        # --- MMR diversified selection ---
+        import numpy as np
+        from sklearn.metrics.pairwise import cosine_similarity as sk_cosine_sim
+
+        n = len(valid_keys)
+        selected_indices: list[int] = []
+        result_keys: list[str] = []
+        max_sim_to_selected = np.zeros(n)
+
+        for _ in range(min(max_extra, n)):
+            if not selected_indices:
+                # First pick: pure relevance
+                mmr_scores = similarities.copy()
+            else:
+                mmr_scores = (
+                    mmr_lambda * similarities
+                    - (1.0 - mmr_lambda) * max_sim_to_selected
+                )
+            # Mask already-selected indices
+            for si in selected_indices:
+                mmr_scores[si] = -999.0
+
+            best_idx = int(np.argmax(mmr_scores))
+            if mmr_scores[best_idx] <= -999.0:
+                break
+
+            selected_indices.append(best_idx)
+            result_keys.append(valid_keys[best_idx])
+
+            # Update inter-candidate max similarity
+            new_sims = sk_cosine_sim(
+                tfidf_matrix[best_idx], tfidf_matrix
+            ).flatten()
+            max_sim_to_selected = np.maximum(max_sim_to_selected, new_sims)
+
+        return result_keys
+
     def _query_neighbor_context_string(self, seeds: set[str], *, _precomputed_keys: list[str] | None = None) -> str:
         """在种子实例集合上按配置做图邻域扩展，序列化为补充检索片段。"""
         max_hops, max_extra, legs = get_query_neighbor_traversal_config()
@@ -1200,7 +1372,7 @@ class ClassGraph:
             query, top_k_instances, threshold=0.5, classes=sensed_classes
         )
         seeds = set(self.selected_instance_keys)
-        expanded_keys = self._neighbor_expansion_key_list(seeds)
+        expanded_keys = self._neighbor_expansion_key_list(seeds, query=query)
         neighbor_str = self._query_neighbor_context_string(seeds, _precomputed_keys=expanded_keys)
         combined_instances = "\n\n".join(
             s for s in (keyword_matched_str, instances_in_classes_str, neighbor_str) if (s or "").strip()
@@ -1252,7 +1424,7 @@ class ClassGraph:
         )
 
         seeds = set(self.selected_instance_keys)
-        expanded_keys = self._neighbor_expansion_key_list(seeds)
+        expanded_keys = self._neighbor_expansion_key_list(seeds, query=query)
         neighbor_str = self._query_neighbor_context_string(seeds, _precomputed_keys=expanded_keys)
         combined_instances = "\n\n".join(
             s for s in (instances_global_str, instances_in_classes_str, neighbor_str) if (s or "").strip()
@@ -1319,6 +1491,91 @@ class ClassGraph:
 
         _logger.error("解析类查询结果失败: 经过 %d 次尝试仍无法解析", _max_retries)
         return {"error": "解析类查询结果失败", "selected_classes": []}
+
+    def _fuse_class_scores_with_bge(
+        self,
+        query: str,
+        class_max_scores: dict,
+        class_nodes: list,
+        class_info_map: dict,
+    ) -> dict:
+        """Fuse TF-IDF class scores with BGE embedding similarity (Option 3).
+
+        Computes per-class BGE score by averaging cached instance embeddings,
+        then applies ``(1-λ)*tfidf + λ*bge`` fusion.  Falls back to pure
+        TF-IDF on any error.
+        """
+        import numpy as np
+        import time
+
+        cfg = get_query_retrieval_config()
+        if cfg.bge_lambda <= 0:
+            return class_max_scores
+        cache = getattr(self, "_bge_embedding_cache", None)
+        if not cache:
+            _logger.debug("BGE class sensing: no embedding cache, skipping")
+            return class_max_scores
+        path = get_embedding_model_path()
+        if not os.path.isdir(path):
+            _logger.debug("BGE class sensing: embedding model dir missing, skipping")
+            return class_max_scores
+
+        try:
+            t0 = time.perf_counter()
+            from sentence_transformers import SentenceTransformer
+            from src.retrieval.bge_query import minmax_01
+            model = SentenceTransformer(path)
+
+            q_emb = model.encode([query], convert_to_numpy=True)
+            q_emb = q_emb / np.maximum(np.linalg.norm(q_emb, axis=1, keepdims=True), 1e-12)
+            q_emb = np.asarray(q_emb, dtype=np.float32)
+
+            class_bge_scores: dict[int, float] = {}
+            for class_idx in class_max_scores:
+                info = class_info_map.get(class_idx, {})
+                class_id = info.get("class_id", "")
+                node = info.get("node")
+                if node is None:
+                    continue
+                # Collect cached embeddings for all instances in this class
+                instances = getattr(node, "_instances", [])
+                embs = []
+                for inst in instances:
+                    eid = f"{class_id}:{inst.get('instance_id', '')}"
+                    if eid in cache:
+                        embs.append(cache[eid])
+                if not embs:
+                    # Fallback: try class_id alone or skip
+                    continue
+                class_emb = np.mean(np.stack(embs, axis=0), axis=0, keepdims=True).astype(np.float32)
+                class_emb = class_emb / np.maximum(np.linalg.norm(class_emb, axis=1, keepdims=True), 1e-12)
+                sim = float((q_emb @ class_emb.T)[0, 0])
+                class_bge_scores[class_idx] = sim
+
+            if not class_bge_scores:
+                _logger.debug("BGE class sensing: no class embeddings found in cache")
+                return class_max_scores
+
+            # Fuse only for classes that have BGE scores
+            scored_idxs = sorted(class_bge_scores.keys())
+            tfidf_vals = [class_max_scores[i] for i in scored_idxs]
+            bge_vals = [class_bge_scores[i] for i in scored_idxs]
+            t01 = minmax_01(tfidf_vals)
+            b01 = minmax_01(bge_vals)
+            lam = cfg.bge_lambda
+            fused = dict(class_max_scores)
+            for j, idx in enumerate(scored_idxs):
+                fused[idx] = (1.0 - lam) * t01[j] + lam * b01[j]
+
+            ms = (time.perf_counter() - t0) * 1000.0
+            _logger.debug(
+                "BGE class sensing: fused %d/%d classes (λ=%.2f) in %.1f ms",
+                len(class_bge_scores), len(class_max_scores), lam, ms,
+            )
+            return fused
+        except Exception as e:
+            _logger.warning("BGE class sensing failed, using pure TF-IDF: %s", e)
+            return class_max_scores
 
     def _sense_classes_by_tfidf(self, query, top_k_class, threshold,allow_below_threshold=True):
         """
@@ -1418,6 +1675,11 @@ class ClassGraph:
         if not class_max_scores:
             _logger.warning("没有找到任何匹配的类片段")
             return {"selected_classes": []}
+
+        # 3b. BGE embedding fusion for class sensing (Option 3)
+        class_max_scores = self._fuse_class_scores_with_bge(
+            query, class_max_scores, class_nodes, class_info_map,
+        )
 
         # 4. 将类按最高相似度排序
         class_scores = list(class_max_scores.items())

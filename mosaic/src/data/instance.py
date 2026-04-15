@@ -2,7 +2,7 @@ import time
 from string import Template
 from typing import List, Dict, Any, Optional, TYPE_CHECKING
 from src.assist import fetch_default_llm_model
-from src.prompts_en import PROMPT_CREATE_INSTANCE, PROMPT_UPDATE_INSTANCE
+from src.prompts_en import PROMPT_CREATE_INSTANCE, PROMPT_UPDATE_INSTANCE, PROMPT_INFER_IMPLICIT_FACTS
 #from src.prompts import PROMPT_CREATE_INSTANCE,PROMPT_UPDATE_INSTANCE
 
 from src.logger import setup_logger
@@ -296,6 +296,54 @@ def _extract_class_info_from_node(class_node) -> Dict[str, Any]:
 
     _logger.debug("Extracted class info: %s", class_info)
     return class_info
+
+
+def enrich_instances_with_inferred_facts(
+    instances: List[Dict],
+    messages: List,
+    class_node,
+) -> None:
+    """Enrich instances with LLM-inferred implicit facts (hybrid build only).
+
+    Appends inferred facts to each instance's ``uninstance_field`` so they
+    become retrievable by TF-IDF / BGE during query time.
+    """
+    if not instances or not messages:
+        return
+
+    class_name = getattr(class_node, "class_name", "Unknown")
+    msg_strs = [m.get("message", m) if isinstance(m, dict) else str(m) for m in messages]
+    messages_text = "\n".join(f"- {s}" for s in msg_strs)
+
+    prompt = Template(PROMPT_INFER_IMPLICIT_FACTS).substitute(
+        class_name=class_name,
+        messages=messages_text,
+    )
+
+    parsed, status = _invoke_resolve_json_payload(prompt)
+    if status != "ok" or parsed is None:
+        _logger.debug("Inference enrichment: LLM returned status=%s, skipping", status)
+        return
+
+    facts: list = []
+    if isinstance(parsed, dict):
+        facts = parsed.get("inferred_facts", [])
+    elif isinstance(parsed, list):
+        facts = parsed
+
+    facts = [f for f in facts if isinstance(f, str) and f.strip()]
+    if not facts:
+        _logger.debug("Inference enrichment: no facts inferred for class %s", class_name)
+        return
+
+    enrichment = "\n[Inferred] " + " | ".join(facts)
+    _logger.info(
+        "Inference enrichment: adding %d inferred facts to %d instances in class %s",
+        len(facts), len(instances), class_name,
+    )
+    for inst in instances:
+        existing = inst.get("uninstance_field", "") or ""
+        inst["uninstance_field"] = (existing + enrichment).strip()
 
 
 
