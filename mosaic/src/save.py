@@ -366,6 +366,10 @@ def save_error(data):
     except Exception as e:
         _logger.warning("Cross-class edge sweep (error) failed: %s", e)
     try:
+        memory.sweep_uncovered_messages(result)
+    except Exception as e:
+        _logger.warning("Uncovered message sweep (error) failed: %s", e)
+    try:
         memory.enrich_dual_graph_edges_post_build()
     except Exception as e:
         _logger.warning("构图(error) 后双图增强失败: %s", e)
@@ -481,6 +485,16 @@ def save(
             _logger.info("Cross-class edge sweep: %s", sweep_stats)
         except Exception as e:
             _logger.warning("Cross-class edge sweep failed: %s", e)
+        try:
+            uncov_stats = memory.sweep_uncovered_messages(result)
+            _logger.info("Uncovered message sweep: %s", uncov_stats)
+            if uncov_stats.get("instances_created", 0) > 0:
+                _twrite(
+                    f"Uncovered message sweep: {uncov_stats['instances_created']} hash instances "
+                    f"created for {uncov_stats['uncovered']} dropped messages"
+                )
+        except Exception as e:
+            _logger.warning("Uncovered message sweep failed: %s", e)
         try:
             memory.enrich_dual_graph_edges_post_build()
         except Exception as e:
@@ -618,6 +632,16 @@ def save_hash(
             _logger.info("Cross-class edge sweep (hash): %s", sweep_stats)
         except Exception as e:
             _logger.warning("Cross-class edge sweep (hash) failed: %s", e)
+        try:
+            uncov_stats = memory.sweep_uncovered_messages(result)
+            _logger.info("Uncovered message sweep (hash): %s", uncov_stats)
+            if uncov_stats.get("instances_created", 0) > 0:
+                _twrite(
+                    f"Uncovered message sweep (hash): {uncov_stats['instances_created']} hash instances "
+                    f"created for {uncov_stats['uncovered']} dropped messages"
+                )
+        except Exception as e:
+            _logger.warning("Uncovered message sweep (hash) failed: %s", e)
         try:
             memory.enrich_dual_graph_edges_post_build()
         except Exception as e:

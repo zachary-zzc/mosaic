@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import ast
 import os
+import re
 from collections import defaultdict, deque
 from datetime import datetime
 from string import Template
@@ -847,6 +848,108 @@ class ClassGraph:
         )
         return stats
 
+    def sweep_uncovered_messages(
+        self, all_batches: list[tuple[list, list]], *, min_text_len: int = 30
+    ) -> dict[str, int]:
+        """Post-build sweep: create hash instances for messages dropped during construction.
+
+        Some messages are lost when ``sense_classes`` matches them to a class
+        but the LLM instance-creation step omits their content (e.g. a message
+        starting with a greeting that also contains factual information like
+        "went fishing").  This sweep catches those orphaned messages and adds
+        them as hash-style instances in the best-matching existing class,
+        ensuring they become searchable by TF-IDF at query time.
+
+        Args:
+            all_batches: The ``(data, context)`` pairs from ``conv_message_splitter``.
+            min_text_len: Minimum message text length to consider (filters greetings).
+
+        Returns:
+            Stats dict with ``checked``, ``uncovered``, ``instances_created``.
+        """
+        stats: dict[str, int] = {"checked": 0, "uncovered": 0, "instances_created": 0}
+
+        # 1. Collect every label already present in any instance
+        covered_labels: set[str] = set()
+        for cn in self.graph.nodes:
+            for inst in getattr(cn, "_instances", []) or []:
+                for lab in inst.get("message_labels") or []:
+                    covered_labels.add(_message_label_key(lab))
+
+        # 2. Identify uncovered messages with substantive content
+        uncovered: list[dict] = []
+        for batch, _ctx in all_batches:
+            for msg in batch:
+                stats["checked"] += 1
+                label = msg.get("label", "")
+                if _message_label_key(label) in covered_labels:
+                    continue
+                text = msg.get("message", "")
+                if len(text.strip()) < min_text_len:
+                    continue
+                uncovered.append(msg)
+
+        stats["uncovered"] = len(uncovered)
+        if not uncovered:
+            _logger.debug("sweep_uncovered_messages: all messages accounted for")
+            return stats
+
+        _logger.info(
+            "sweep_uncovered_messages: %d/%d messages uncovered, creating hash instances",
+            len(uncovered), stats["checked"],
+        )
+
+        # 3. For each uncovered message, TF-IDF match to the best class
+        #    and create a minimal hash instance.
+        for msg in uncovered:
+            text = msg.get("message", "")
+            label = msg.get("label", "")
+
+            tfidf_result = self._sense_classes_by_tfidf(
+                query=text, top_k_class=1, threshold=0.0, allow_below_threshold=True
+            )
+            selected = tfidf_result.get("selected_classes", [])
+            class_node = None
+            if selected:
+                cid = selected[0].get("class_id")
+                if cid:
+                    class_node = self.get_classnode(cid)
+
+            if class_node is None:
+                # Fall back to the first class node (usually the broadest)
+                nodes = list(self.graph.nodes)
+                if nodes:
+                    class_node = nodes[0]
+            if class_node is None:
+                continue
+
+            instances = getattr(class_node, "_instances", None) or []
+            current_count = len(instances)
+            instance = {
+                "instance_id": f"instance_{current_count + 1}",
+                "instance_name": f"Supplementary content (label {label})",
+                "attributes": {},
+                "operations": {},
+                "uninstance_field": text,
+                "message_labels": [label],
+            }
+            if not hasattr(class_node, "_instances") or class_node._instances is None:
+                class_node._instances = []
+            class_node._instances.append(instance)
+            stats["instances_created"] += 1
+            _logger.debug(
+                "sweep_uncovered: label %s → class %s (%s)",
+                label,
+                getattr(class_node, "class_id", "?"),
+                getattr(class_node, "class_name", "?"),
+            )
+
+        _logger.info(
+            "sweep_uncovered_messages: created %d hash instances for dropped messages",
+            stats["instances_created"],
+        )
+        return stats
+
     def enrich_dual_graph_edges_post_build(self) -> dict[str, Any]:
         """
         构图全批次结束后：BGE 建 E_A、可选 LLM 非对称先决 E_P（DAG 安全），并刷新快照 / EntityGraph。
@@ -1194,16 +1297,23 @@ class ClassGraph:
         query: str,
     ) -> list[str]:
         """
-        Collect ALL reachable neighbors within *max_hops*, then rank them using
-        MMR (Maximal Marginal Relevance) to balance relevance **and** diversity.
+        Coverage-aware neighbor expansion for multi-hop retrieval.
 
-        Pure TF-IDF ranking biases toward same-topic neighbors, which hurts
-        multi-hop queries requiring cross-topic bridging.  MMR iteratively
-        selects candidates that are relevant to the query while penalising
-        redundancy with already-selected neighbors.
+        The old MMR strategy ranked neighbors by TF-IDF similarity to the full
+        query, which re-introduced the same bias that already failed to retrieve
+        these entities.  This method instead uses a two-signal score:
 
-        The trade-off is controlled by ``[QUERY] neighbor_mmr_lambda``
-        (default 0.5; 1.0 = pure relevance = old behaviour).
+        1. **Query relevance** via edge content: the connecting edge's dialog
+           text often bridges the semantic gap between seed and answer entity.
+           Score += keyword overlap between the query and edges touching this
+           candidate.
+        2. **Content novelty**: neighbors whose text is *dissimilar* from
+           already-selected seeds bring genuinely new information — exactly
+           what multi-hop needs.  Score += (1 - max_sim_to_any_seed).
+
+        At hop 2+, only "bridge" nodes (those matching >= 1 query keyword in
+        either their own text or connecting edge text) are expanded further,
+        keeping the search focused.
         """
         if max_hops <= 0 or max_extra <= 0 or not seeds:
             return []
@@ -1211,30 +1321,7 @@ class ClassGraph:
         if not adj:
             return []
 
-        # BFS to find ALL reachable non-seed neighbours within max_hops
-        visited: dict[str, int] = {s: 0 for s in seeds}
-        q: deque[tuple[str, int]] = deque((s, 0) for s in seeds)
-        candidates: list[str] = []
-
-        while q:
-            u, d = q.popleft()
-            if d >= max_hops:
-                continue
-            for v in adj.get(u, ()):
-                if v in visited:
-                    continue
-                nd = d + 1
-                visited[v] = nd
-                q.append((v, nd))
-                if v not in seeds and nd <= max_hops:
-                    candidates.append(v)
-
-        if not candidates:
-            return []
-        if len(candidates) <= max_extra:
-            return candidates  # no need to score
-
-        # Build instance_key → instance_dict lookup
+        # ── 0. Build instance_key → instance lookup ──
         key_to_inst: dict[str, dict] = {}
         for class_node in self.graph.nodes:
             cid = getattr(class_node, "class_id", None) or ""
@@ -1246,67 +1333,157 @@ class ClassGraph:
                     continue
                 key_to_inst[self._instance_key(cid, iid)] = inst
 
-        # Build text representations for each candidate
-        texts: list[str] = []
-        valid_keys: list[str] = []
-        for ck in candidates:
-            inst = key_to_inst.get(ck)
+        def _inst_text(key: str) -> str:
+            inst = key_to_inst.get(key)
             if inst is None:
-                continue
+                return ""
             parts = [tx for _ty, tx in build_instance_fragments(inst) if (tx or "").strip()]
-            texts.append("\n".join(parts) if parts else " ")
-            valid_keys.append(ck)
+            return "\n".join(parts) if parts else ""
 
-        if not texts:
-            return candidates[:max_extra]
+        # ── 1. Extract query keywords ──
+        _POSS_RE = re.compile(r"['\u2019]s$")
+        _POSS_TEXT_RE = re.compile(r"['\u2019]s\b")
+        q_lower = query.lower()
+        q_words: set[str] = set()
+        for w in q_lower.split():
+            w = w.strip(".,!?()[]\"':;")
+            w = _POSS_RE.sub("", w)  # "audrey's" → "audrey"
+            if len(w) > 2:
+                q_words.add(w)
+        _stop = {"the", "and", "for", "are", "was", "were", "has", "have", "had",
+                 "that", "this", "with", "from", "what", "which", "who", "how",
+                 "does", "did", "not", "been", "but", "they", "them", "than",
+                 "can", "her", "his", "she", "you", "all", "any", "some", "will"}
+        q_words -= _stop
 
-        # Score by TF-IDF similarity to query
-        similarities, _, tfidf_matrix = calculate_tfidf_similarity(query, texts)
+        def _norm_poss(text: str) -> str:
+            """Strip possessive suffixes for consistent keyword matching."""
+            return _POSS_TEXT_RE.sub("", text)
 
-        mmr_lambda = get_query_neighbor_mmr_lambda()
-        if mmr_lambda >= 1.0:
-            # Pure relevance — original behaviour
-            scored = sorted(
-                zip(valid_keys, similarities), key=lambda x: x[1], reverse=True
-            )
-            return [k for k, _ in scored[:max_extra]]
+        # ── 2. Build edge content index (instance_key → list of edge texts) ──
+        edge_texts_by_key: dict[str, list[str]] = defaultdict(list)
+        for rec in self.edges or []:
+            leg = normalize_edge_leg(rec.get("edge_leg"))
+            if leg not in allowed_legs:
+                continue
+            content = (rec.get("content") or "").lower()
+            if not content:
+                continue
+            conns = rec.get("connections") or []
+            for c in conns:
+                ocid = c.get("class_id")
+                oid = c.get("instance_id")
+                if ocid and oid is not None:
+                    edge_texts_by_key[self._instance_key(str(ocid), oid)].append(content)
 
-        # --- MMR diversified selection ---
-        import numpy as np
-        from sklearn.metrics.pairwise import cosine_similarity as sk_cosine_sim
+        def _kw_hits(key: str) -> int:
+            """Count query keyword hits in instance text + edge texts."""
+            txt = _norm_poss(_inst_text(key).lower())
+            hits = sum(1 for kw in q_words if kw in txt)
+            for etxt in edge_texts_by_key.get(key, []):
+                hits += sum(1 for kw in q_words if kw in _norm_poss(etxt))
+            return hits
 
-        n = len(valid_keys)
-        selected_indices: list[int] = []
-        result_keys: list[str] = []
-        max_sim_to_selected = np.zeros(n)
+        # ── 3. Query-guided BFS ──
+        # Hop 1: expand all seed neighbors unconditionally.
+        # Hop 2+: only expand from "bridge" nodes (keyword hits >= 1).
+        visited: dict[str, int] = {s: 0 for s in seeds}
+        frontier: deque[tuple[str, int]] = deque((s, 0) for s in seeds)
+        candidates: list[str] = []
+        candidate_hop: dict[str, int] = {}
 
-        for _ in range(min(max_extra, n)):
-            if not selected_indices:
-                # First pick: pure relevance
-                mmr_scores = similarities.copy()
-            else:
-                mmr_scores = (
-                    mmr_lambda * similarities
-                    - (1.0 - mmr_lambda) * max_sim_to_selected
-                )
-            # Mask already-selected indices
-            for si in selected_indices:
-                mmr_scores[si] = -999.0
+        while frontier:
+            u, d = frontier.popleft()
+            if d >= max_hops:
+                continue
+            nd = d + 1
+            for v in adj.get(u, ()):
+                if v in visited:
+                    continue
+                visited[v] = nd
+                if v not in seeds:
+                    candidates.append(v)
+                    candidate_hop[v] = nd
+                # At hop 1 always expand; at hop 2+ only if v is a bridge
+                if nd < max_hops:
+                    if nd == 1 or _kw_hits(v) >= 1:
+                        frontier.append((v, nd))
 
-            best_idx = int(np.argmax(mmr_scores))
-            if mmr_scores[best_idx] <= -999.0:
+        if not candidates:
+            return []
+        if len(candidates) <= max_extra:
+            return candidates
+
+        # ── 4. Per-seed round-robin selection ──
+        # Global ranking lets one dense neighborhood dominate all slots.
+        # Instead, allocate 1-2 neighbor slots *per seed*, round-robin,
+        # so every region of the graph around the retrieved instances is
+        # explored — exactly what multi-hop retrieval needs.
+
+        def _score(ck: str) -> float:
+            """Keyword overlap on edge text + instance text vs query."""
+            edge_hits = 0
+            for etxt in edge_texts_by_key.get(ck, []):
+                edge_hits += sum(1 for kw in q_words if kw in _norm_poss(etxt))
+            edge_sc = min(edge_hits / max(len(q_words), 1), 1.0)
+            inst_txt = _norm_poss(_inst_text(ck).lower())
+            inst_hits = sum(1 for kw in q_words if kw in inst_txt)
+            inst_sc = min(inst_hits / max(len(q_words), 1), 1.0)
+            return 0.5 * inst_sc + 0.5 * edge_sc
+
+        hop1_cands = [ck for ck in candidates if candidate_hop.get(ck, 1) == 1]
+        hop2_cands = [ck for ck in candidates if candidate_hop.get(ck, 1) == 2]
+
+        # Map: seed → sorted list of (candidate, score) for hop-1 neighbors
+        seed_nbrs: dict[str, list[tuple[str, float]]] = defaultdict(list)
+        for ck in hop1_cands:
+            sc = _score(ck)
+            for sk in seeds:
+                if ck in adj.get(sk, set()):
+                    seed_nbrs[sk].append((ck, sc))
+        for sk in seed_nbrs:
+            seed_nbrs[sk].sort(key=lambda x: -x[1])
+
+        # Round-robin: take top neighbor from each seed, then 2nd, etc.
+        result: list[str] = []
+        selected_set: set[str] = set()
+        cursor: dict[str, int] = {sk: 0 for sk in seed_nbrs}
+        active = [sk for sk in seeds if sk in seed_nbrs]
+
+        while len(result) < max_extra and active:
+            next_active = []
+            for sk in active:
+                if len(result) >= max_extra:
+                    break
+                nbrs = seed_nbrs[sk]
+                # Advance past already-selected candidates
+                while cursor[sk] < len(nbrs) and nbrs[cursor[sk]][0] in selected_set:
+                    cursor[sk] += 1
+                if cursor[sk] < len(nbrs):
+                    ck, _ = nbrs[cursor[sk]]
+                    result.append(ck)
+                    selected_set.add(ck)
+                    cursor[sk] += 1
+                    next_active.append(sk)
+            if not next_active:
                 break
+            active = next_active
 
-            selected_indices.append(best_idx)
-            result_keys.append(valid_keys[best_idx])
+        # Fill remaining slots with hop-2 candidates by global score
+        if len(result) < max_extra and hop2_cands:
+            hop2_scored = [(ck, _score(ck)) for ck in hop2_cands if ck not in selected_set]
+            hop2_scored.sort(key=lambda x: -x[1])
+            for ck, _ in hop2_scored:
+                if len(result) >= max_extra:
+                    break
+                result.append(ck)
+                selected_set.add(ck)
 
-            # Update inter-candidate max similarity
-            new_sims = sk_cosine_sim(
-                tfidf_matrix[best_idx], tfidf_matrix
-            ).flatten()
-            max_sim_to_selected = np.maximum(max_sim_to_selected, new_sims)
-
-        return result_keys
+        _logger.debug(
+            "Per-seed round-robin expansion: %d candidates (%d hop1, %d hop2) -> %d selected",
+            len(candidates), len(hop1_cands), len(hop2_cands), len(result),
+        )
+        return result
 
     def _query_neighbor_context_string(self, seeds: set[str], *, _precomputed_keys: list[str] | None = None) -> str:
         """在种子实例集合上按配置做图邻域扩展，序列化为补充检索片段。"""

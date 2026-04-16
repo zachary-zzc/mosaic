@@ -59,6 +59,7 @@ from openai import OpenAI
 from src.data.graph import ClassGraph
 from src.assist import load_mosaic_memory_pickle, read_to_file_json
 from src.config_loader import get_api_key_and_base_url
+from src.qa_common import judge_answer_llm
 
 api_key, base_url = get_api_key_and_base_url()
 client = OpenAI(api_key=api_key, base_url=base_url, timeout=60)
@@ -74,16 +75,6 @@ If the snippets do not contain enough information, answer based on what is avail
 {question}
 
 Answer concisely."""
-
-JUDGE_PROMPT = """You are a judge evaluating if a generated answer is correct compared to the gold answer.
-The generated answer may use synonyms, paraphrases, or different wording.
-As long as the core factual content or sentiment is equivalent, it should be CORRECT.
-
-Question: {question}
-Gold Answer: {gold}
-Generated Answer: {pred}
-
-Reply with exactly one word: CORRECT or WRONG"""
 
 
 def llm_call(prompt, timeout=30):
@@ -165,9 +156,7 @@ def evaluate(graph_pkl, tags_json, questions, label, search_method="hash"):
                 ctx, trace = memory._search_by_sub_hash(question)
             prompt = ANSWER_PROMPT.format(context=ctx[:8000], question=question)
             answer = llm_call(prompt)
-            judge_prompt = JUDGE_PROMPT.format(question=question, gold=gold, pred=answer)
-            judgment = llm_call(judge_prompt, timeout=15)
-            judgment = "CORRECT" if "CORRECT" in judgment.upper() else "WRONG"
+            judgment = judge_answer_llm(question, gold, answer)
         except Exception as e:
             answer = f"ERROR: {e}"
             judgment = "ERROR"
@@ -218,11 +207,10 @@ def main():
     print(f"  Model: {MODEL}")
     print("=" * 60)
 
-    # Load QA and filter multi-hop
+    # Load QA and filter multi-hop (category 1 in LoCoMo = multi-hop)
     questions = read_to_file_json(QA_JSON)
-    mh = [q for q in questions if q.get("category") == 3]
-    all_q = questions
-    print(f"  Total questions: {len(all_q)}, Multi-hop: {len(mh)}")
+    mh = [q for q in questions if q.get("category") == 1]
+    print(f"  Multi-hop questions (category=1): {len(mh)}")
 
     strategies = ["hybrid", "hash_only"] if args.strategy == "both" else [args.strategy]
     results = {}
@@ -255,9 +243,8 @@ def main():
             print(f"  [SKIP] Graph not found: {graph_pkl}")
             continue
 
-        # --- Evaluate ---
+        # --- Evaluate multi-hop only ---
         if not args.skip_qa:
-            # Multi-hop only
             c, t, det = evaluate(graph_pkl, tags_json, mh,
                                  f"{strategy.upper()} — Multi-hop", "hash")
             results[f"{strategy}_multihop"] = {"correct": c, "total": t, "acc": c/t*100 if t else 0}
@@ -268,16 +255,6 @@ def main():
                 json.dump({"correct": c, "total": t, "acc": c/t*100 if t else 0,
                            "details": det}, f, indent=2, ensure_ascii=False)
             print(f"  Details saved: {detail_path}")
-
-            # All categories
-            c_all, t_all, det_all = evaluate(graph_pkl, tags_json, all_q,
-                                              f"{strategy.upper()} — All categories", "hash")
-            results[f"{strategy}_all"] = {"correct": c_all, "total": t_all, "acc": c_all/t_all*100 if t_all else 0}
-
-            all_path = os.path.join(OUT_DIR, f"{CONV_NAME}_{strategy}_all_details.json")
-            with open(all_path, "w") as f:
-                json.dump({"correct": c_all, "total": t_all, "acc": c_all/t_all*100 if t_all else 0,
-                           "details": det_all}, f, indent=2, ensure_ascii=False)
 
     # --- Compare with baseline ---
     print("\n" + "=" * 60)
