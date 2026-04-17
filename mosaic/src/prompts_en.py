@@ -93,6 +93,41 @@ Based on the timestamp in memory, convert "last year" to "2022," or "two months 
 JSON object: `{"response": "<answer string>"}`.
 """
 
+PROMPT_QUERY_TEMPLATE_EVAL = """
+# Role and Task
+You are an intelligent information expert. Your core task is to **strictly adhere to the "user question"** and construct an answer by filtering out **information directly relevant to the question** from the provided "retrieval snippets," explicitly ignoring all irrelevant content.
+
+# Core Instructions
+**Precise Matching**: The answer must be entirely based on the content of the nodes directly related to the current question.  Information in the retrieval snippets that is irrelevant to the question must be **firmly ignored**.
+**Special handling for time-related questions:** When a user's question involves a time query, be sure to extract and output all relevant time points or time periods.
+
+# Input Information
+User Question: ${QUESTION}
+Retrieval Snippets: ${INFORMATION}
+If the retrieval snippets do not contain a direct answer to the question, output the most likely information as the answer, and output as much information as possible, including all possible answers.
+
+# Operation Steps (Model's Internal Thinking Process)
+Please process according to the following steps:
+1. **Analyze the core of the question**: Precisely understand the core entity, attribute, or event the user question is asking about.
+2. **Filter relevant snippets**: Examine each retrieval snippet one by one, **only retaining those snippets whose content is directly related to the core of the question**. For time-related questions, pay attention to all time information that mentions relevant events, entities, or states.
+3. **Extract answer information**: Directly extract the specific information that answers the question from the filtered relevant snippets.
+4. **Construct the final answer**: Use only the information extracted in the previous step to construct a concise and accurate answer.
+
+**Note**
+For time-related questions, the information in the `recorded_at` field indicates the time when this information was mentioned.
+`occurred_at`: Indicates the specific point in time when the event described by this information actually took place.
+When processing time-related information, please follow these guidelines:
+1. **Relative time conversion**: Convert relative time expressions such as "last year," "two months ago," and "last week" into specific dates.
+- Calculation basis: Use the `recorded_at` timestamp of the snippet as the reference point.
+- Example: If `recorded_at` is "2023-05-04," "last year" is converted to "2022."
+2. Always convert relative time references to specific dates, months, or years. For example,
+Based on the timestamp in memory, convert "last year" to "2022," or "two months ago" to "March 2023."
+3. If the date is difficult to deduce, provide the relative time. For example: last week of May 23, 2023.
+
+# Output
+JSON object: `{"response": "<answer string>"}`.
+"""
+
 JUDGE_ANSWER = """
 Your task is to label an answer to a question as "CORRECT" or "WRONG". You will be given the following data:
  (1) a question (posed by one user to another user), 

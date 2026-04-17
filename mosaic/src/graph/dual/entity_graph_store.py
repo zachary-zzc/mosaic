@@ -155,7 +155,8 @@ def _instance_description(inst: dict[str, Any]) -> str:
     if parts:
         return "\n".join(parts)
     raw = str(inst)
-    return raw if len(raw) <= 8000 else raw[:8000] + "…"
+    return raw
+    # return raw if len(raw) <= 8000 else raw[:8000] + "…"
 
 
 def entity_graph_from_class_graph(cg: Any) -> EntityGraphStore:

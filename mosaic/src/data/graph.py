@@ -74,10 +74,10 @@ def _truncate_context(text: str, max_chars: int) -> str:
 
 
 def _trim_build_context(context: Any, max_messages: int | None = None) -> Any:
-    """限制构图时传入 LLM 的上下文条数，降低 prompt 体积（MOSAIC_BUILD_CONTEXT_MAX_MESSAGES，默认 24）。"""
+    """限制构图时传入 LLM 的上下文条数，降低 prompt 体积（MOSAIC_BUILD_CONTEXT_MAX_MESSAGES，默认 12）。"""
     if max_messages is None:
-        raw = os.environ.get("MOSAIC_BUILD_CONTEXT_MAX_MESSAGES", "24").strip()
-        max_messages = int(raw) if raw.isdigit() else 24
+        raw = os.environ.get("MOSAIC_BUILD_CONTEXT_MAX_MESSAGES", "12").strip()
+        max_messages = int(raw) if raw.isdigit() else 12
     if max_messages <= 0 or not isinstance(context, list):
         return context
     if len(context) <= max_messages:
@@ -123,8 +123,12 @@ class ClassGraph:
         self._graph_save_dir = os.environ.get("GRAPH_SAVE_DIR") or os.path.join(os.getcwd(), "results", "graph")
 
         self.selected_instance_keys = set()  # 用于存储已选中实例的唯一标识
+        self.all_instances = []  # 存储所有实例对象
         self._retrieval_bge_accum: list[dict[str, Any]] = []  # 单次查询内多次 _fetch 的 BGE 遥测
         self._bge_embedding_cache: dict[str, Any] | None = None  # 构图阶段 BGE 嵌入缓存，供查询复用
+
+        # HaluMem eval: 用于跟踪会话间新增的实例状态
+        self.last_session_instance_states = set()
         # B 轨遥测（docs/optimization.md §5 B-3）：跨批次累计，供日志与快照/EntityGraph legacy
         self.sense_class_telemetry_cumulative: dict[str, int] = {
             "tfidf_matched_fragment_labels": 0,
@@ -1384,41 +1388,14 @@ class ClassGraph:
                 hits += sum(1 for kw in q_words if kw in _norm_poss(etxt))
             return hits
 
-        # ── 3. Query-guided BFS ──
-        # Hop 1: expand all seed neighbors unconditionally.
-        # Hop 2+: only expand from "bridge" nodes (keyword hits >= 1).
+        # ── 3. Query-guided DFS with similarity scoring ──
+        # DFS prioritizes depth for multi-hop: follow high-similarity
+        # chains deeply before exploring breadth, then backfill with
+        # remaining candidates sorted by score.
         visited: dict[str, int] = {s: 0 for s in seeds}
-        frontier: deque[tuple[str, int]] = deque((s, 0) for s in seeds)
         candidates: list[str] = []
         candidate_hop: dict[str, int] = {}
-
-        while frontier:
-            u, d = frontier.popleft()
-            if d >= max_hops:
-                continue
-            nd = d + 1
-            for v in adj.get(u, ()):
-                if v in visited:
-                    continue
-                visited[v] = nd
-                if v not in seeds:
-                    candidates.append(v)
-                    candidate_hop[v] = nd
-                # At hop 1 always expand; at hop 2+ only if v is a bridge
-                if nd < max_hops:
-                    if nd == 1 or _kw_hits(v) >= 1:
-                        frontier.append((v, nd))
-
-        if not candidates:
-            return []
-        if len(candidates) <= max_extra:
-            return candidates
-
-        # ── 4. Per-seed round-robin selection ──
-        # Global ranking lets one dense neighborhood dominate all slots.
-        # Instead, allocate 1-2 neighbor slots *per seed*, round-robin,
-        # so every region of the graph around the retrieved instances is
-        # explored — exactly what multi-hop retrieval needs.
+        candidate_score: dict[str, float] = {}
 
         def _score(ck: str) -> float:
             """Keyword overlap on edge text + instance text vs query."""
@@ -1431,57 +1408,65 @@ class ClassGraph:
             inst_sc = min(inst_hits / max(len(q_words), 1), 1.0)
             return 0.5 * inst_sc + 0.5 * edge_sc
 
-        hop1_cands = [ck for ck in candidates if candidate_hop.get(ck, 1) == 1]
-        hop2_cands = [ck for ck in candidates if candidate_hop.get(ck, 1) == 2]
+        # DFS stack: (node, depth). Use stack (LIFO) for depth-first.
+        stack: list[tuple[str, int]] = [(s, 0) for s in seeds]
+        while stack:
+            u, d = stack.pop()
+            if d >= max_hops:
+                continue
+            nd = d + 1
+            # Score neighbors and sort so highest-score is pushed last (popped first)
+            neighbors = []
+            for v in adj.get(u, ()):
+                if v in visited:
+                    continue
+                visited[v] = nd
+                sc = _score(v)
+                if v not in seeds:
+                    candidates.append(v)
+                    candidate_hop[v] = nd
+                    candidate_score[v] = sc
+                neighbors.append((v, nd, sc))
+            # Push in ascending score order so highest is on top of stack
+            neighbors.sort(key=lambda x: x[2])
+            for v, vd, sc in neighbors:
+                # Continue DFS if within hop limit and node has keyword relevance
+                if vd < max_hops and (vd == 1 or sc > 0):
+                    stack.append((v, vd))
 
-        # Map: seed → sorted list of (candidate, score) for hop-1 neighbors
-        seed_nbrs: dict[str, list[tuple[str, float]]] = defaultdict(list)
-        for ck in hop1_cands:
-            sc = _score(ck)
-            for sk in seeds:
-                if ck in adj.get(sk, set()):
-                    seed_nbrs[sk].append((ck, sc))
-        for sk in seed_nbrs:
-            seed_nbrs[sk].sort(key=lambda x: -x[1])
+        # ── 4. Score-ranked selection with depth bonus ──
+        # DFS already explored deep chains; now select best candidates
+        # with a depth bonus to favor multi-hop discoveries.
+        if not candidates:
+            return []
+        if len(candidates) <= max_extra:
+            # All fit — sort by score descending for context ordering
+            candidates.sort(key=lambda ck: -candidate_score.get(ck, 0))
+            _logger.debug(
+                "DFS expansion: %d candidates (all selected, max_hops=%d)",
+                len(candidates), max_hops,
+            )
+            return candidates
 
-        # Round-robin: take top neighbor from each seed, then 2nd, etc.
-        result: list[str] = []
-        selected_set: set[str] = set()
-        cursor: dict[str, int] = {sk: 0 for sk in seed_nbrs}
-        active = [sk for sk in seeds if sk in seed_nbrs]
+        # Rank: score + small depth bonus (deeper = explored for a reason)
+        def _rank(ck: str) -> float:
+            sc = candidate_score.get(ck, 0)
+            hop = candidate_hop.get(ck, 1)
+            depth_bonus = 0.05 * (hop - 1) if sc > 0 else 0
+            return sc + depth_bonus
 
-        while len(result) < max_extra and active:
-            next_active = []
-            for sk in active:
-                if len(result) >= max_extra:
-                    break
-                nbrs = seed_nbrs[sk]
-                # Advance past already-selected candidates
-                while cursor[sk] < len(nbrs) and nbrs[cursor[sk]][0] in selected_set:
-                    cursor[sk] += 1
-                if cursor[sk] < len(nbrs):
-                    ck, _ = nbrs[cursor[sk]]
-                    result.append(ck)
-                    selected_set.add(ck)
-                    cursor[sk] += 1
-                    next_active.append(sk)
-            if not next_active:
-                break
-            active = next_active
+        scored = [(ck, _rank(ck)) for ck in candidates]
+        scored.sort(key=lambda x: -x[1])
+        result = [ck for ck, _ in scored[:max_extra]]
 
-        # Fill remaining slots with hop-2 candidates by global score
-        if len(result) < max_extra and hop2_cands:
-            hop2_scored = [(ck, _score(ck)) for ck in hop2_cands if ck not in selected_set]
-            hop2_scored.sort(key=lambda x: -x[1])
-            for ck, _ in hop2_scored:
-                if len(result) >= max_extra:
-                    break
-                result.append(ck)
-                selected_set.add(ck)
-
+        hop_counts: dict[int, int] = {}
+        for ck in result:
+            h = candidate_hop.get(ck, 1)
+            hop_counts[h] = hop_counts.get(h, 0) + 1
+        hop_str = " ".join(f"hop{h}={n}" for h, n in sorted(hop_counts.items()))
         _logger.debug(
-            "Per-seed round-robin expansion: %d candidates (%d hop1, %d hop2) -> %d selected",
-            len(candidates), len(hop1_cands), len(hop2_cands), len(result),
+            "DFS expansion: %d candidates -> %d selected (%s)",
+            len(candidates), len(result), hop_str,
         )
         return result
 
@@ -3031,3 +3016,59 @@ class ClassGraph:
                     if instance.get('instance_id') == instance_id:
                         return instance
         return None
+
+    # ── HaluMem eval helpers ───────────────────────────────────────
+    def get_all_instances_state(self):
+        """
+        获取当前所有实例的状态（唯一标识符）
+        :return: 包含所有实例(class_id, instance_id)的集合
+        """
+        instance_states = set()
+        for node in self.graph.nodes:
+            if hasattr(node, 'class_id') and hasattr(node, '_instances'):
+                class_id = getattr(node, 'class_id', None)
+                if class_id is None:
+                    continue
+                class_instances = getattr(node, '_instances', [])
+                for instance in class_instances:
+                    instance_id = instance.get('instance_id')
+                    if instance_id:
+                        instance_states.add((class_id, instance_id))
+        return instance_states
+
+    def record_current_state(self):
+        """
+        记录当前实例状态
+        """
+        self.last_session_instance_states = self.get_all_instances_state()
+
+    def get_new_instances_since_state(self, old_state):
+        """
+        获取自指定状态以来新增的实例
+        :param old_state: 之前记录的实例状态集合
+        :return: 新增的实例列表
+        """
+        current_state = self.get_all_instances_state()
+        new_instance_keys = current_state - old_state
+
+        _logger.info(f"新增的实例有 {len(new_instance_keys)}个, 具体{new_instance_keys}")
+
+        new_instances = []
+        for class_id, instance_id in new_instance_keys:
+            instance = self._find_instance_by_ids(class_id, instance_id)
+            if instance:
+                if isinstance(instance, dict):
+                    instance_with_class = instance.copy()
+                    instance_with_class['class_id'] = class_id
+                else:
+                    try:
+                        instance_with_class = dict(instance.__dict__) if hasattr(instance, '__dict__') else {}
+                        instance_with_class['class_id'] = class_id
+                    except Exception:
+                        instance_with_class = {
+                            'original_instance': instance,
+                            'class_id': class_id
+                        }
+                new_instances.append(instance_with_class)
+
+        return new_instances

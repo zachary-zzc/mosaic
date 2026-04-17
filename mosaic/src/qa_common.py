@@ -107,6 +107,7 @@ def run_qa_loop(
     query_fn: Callable[[str, Any], Any],
     *,
     skip_category: int = 5,
+    only_categories: List[int] | None = None,
     max_questions: int | None = None,
     progress_callback: Callable[[int, int, float], None] | None = None,
     initial_qa_results: List[Dict[str, Any]] | None = None,
@@ -118,6 +119,7 @@ def run_qa_loop(
 
     ``query_fn`` 可返回 ``str``，或含 ``answer`` 键的 ``dict``（可带 ``retrieved_context``、``graph_stats``，E-1）。
 
+    ``only_categories``：若不为 None，仅评测属于列表中的 category 的题目。
     ``initial_qa_results``：断点续跑时传入已完成的条目（须含 ``qa_source_index``，与当前 ``questions`` 枚举下标一致）。
     ``partial_save``：每完成一题或写入一条 error 后回调，便于落盘临时结果。
     """
@@ -151,6 +153,8 @@ def run_qa_loop(
             question = qa_item.get("question", "")
             category = qa_item.get("category", 0)
             if category == skip_category:
+                continue
+            if only_categories is not None and category not in only_categories:
                 continue
 
             if i in done_indices:

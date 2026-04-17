@@ -611,4 +611,69 @@ def keywords_process(keywords: List) -> List[str]:
     return result
 
 
+# ── HaluMem eval helpers ───────────────────────────────────────
+
+def serialize_instance_eval(data):
+    """
+    序列化实例数据（不包含操作函数），用于HaluMem数据的acc评估。
+
+    Args:
+        data: 实例数据列表，每个实例为字典形式
+
+    Returns:
+        list[str]: 每个实例序列化为一个字符串
+    """
+    if not data:
+        return []
+
+    result_list = []
+    for i, instance in enumerate(data, 1):
+        result_lines = []
+        instance_name = instance.get('instance_name', f'Unknown_Instance_{i}')
+        uninstance_field = instance.get('uninstance_field', '')
+
+        result_lines.append(f"\n─── instance {i}: {instance_name} ───")
+        attributes = instance.get('attributes', {})
+        if attributes:
+            for attr_name, attr_content in attributes.items():
+                if isinstance(attr_content, dict):
+                    description = attr_content.get('description', 'no description')
+                    value = attr_content.get('value', 'no value')
+                    occurred = attr_content.get('occurred', 'none')
+                    recorded_at = attr_content.get('recorded_at', 'none')
+                else:
+                    description = f"(attribute {attr_name})"
+                    value = attr_content if attr_content is not None else 'no value'
+                    occurred = 'none'
+                    recorded_at = 'none'
+                result_lines.append(
+                    f"Description: {description};Value: {value};"
+                    f"Occurred Time: {occurred};Recorded Time: {recorded_at}"
+                )
+        if uninstance_field:
+            result_lines.append(f"Uninstance_field: {uninstance_field}")
+
+        result_list.append("\n".join(result_lines))
+    return result_list
+
+
+def llm_request_for_json(prompt):
+    """
+    向LLM发送prompt并解析JSON返回（用于HaluMem评估）。
+    """
+    llm = fetch_default_llm_model()
+    response = llm.invoke(prompt)
+    content = getattr(response, "content", None) or str(response)
+    _logger.info(f"LLM响应: {content}")
+    result = parse_llm_json_object(content)
+    if result is not None:
+        return result
+    # fallback: try regex extraction
+    import re as _re
+    match = _re.search(r"```json\s*(\{.*?\})\s*```", content, _re.DOTALL)
+    if match:
+        return json.loads(match.group(1).strip())
+    return json.loads(content)
+
+
 

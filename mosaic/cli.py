@@ -152,6 +152,7 @@ def cmd_query(args: argparse.Namespace) -> int:
             max_questions=args.max_questions,
             method=method,
             resume=bool(getattr(args, "resume", False)),
+            only_categories=getattr(args, "only_categories", None),
         )
         return 0
 
@@ -190,6 +191,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         summary_out=args.summary_out,
         output=args.output,
         max_questions=args.max_questions,
+        only_categories=getattr(args, "only_categories", None),
         resume=getattr(args, "resume", False),
         log_prompt=getattr(args, "log_prompt", None),
         no_show_retrieval=getattr(args, "no_show_retrieval", False),
@@ -280,6 +282,14 @@ def _build_parser() -> argparse.ArgumentParser:
     pq.add_argument("--output", default=None, help="批量评测占位输出路径（可选）")
     pq.add_argument("--max-questions", type=int, default=None, help="最多评测题数")
     pq.add_argument(
+        "--only-categories",
+        type=int,
+        nargs="+",
+        default=None,
+        metavar="CAT",
+        help="仅评测指定 category 的题目（如 --only-categories 1 3）",
+    )
+    pq.add_argument(
         "--resume",
         action="store_true",
         help="QA 断点续跑：若存在 <output>.partial.json 则跳过已评测题并追加",
@@ -313,6 +323,14 @@ def _build_parser() -> argparse.ArgumentParser:
     pr.add_argument("--summary-out", default=None)
     pr.add_argument("--output", default=None)
     pr.add_argument("--max-questions", type=int, default=None)
+    pr.add_argument(
+        "--only-categories",
+        type=int,
+        nargs="+",
+        default=None,
+        metavar="CAT",
+        help="仅评测指定 category 的题目（如 --only-categories 1 3）",
+    )
     pr.add_argument("--checkpoint", default=None, help="构图断点路径（默认由 --graph-out 推导）")
     pr.add_argument("--resume", action="store_true", help="构图与（若指定 qa）QA 均尝试断点续跑")
     pr.add_argument(

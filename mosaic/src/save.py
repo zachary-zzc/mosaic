@@ -300,8 +300,12 @@ def run_build_batch(
         )
         added_class_nodes = memory.add_classnodes(new_class_messages, use_hash=True)
     else:
+        # Hybrid: LLM only for new class creation; matched classes use hash
+        # for instance processing to reduce LLM calls significantly.
         relevant_class_messages, new_class_messages = memory.sense_classes(data, context)
-        processed_classes = memory.process_relevant_class_instances(relevant_class_messages)
+        processed_classes = memory.process_relevant_class_instances(
+            relevant_class_messages, use_hash=True
+        )
         added_class_nodes = memory.add_classnodes(new_class_messages)
     _logger.debug("relevant_class_messages: %s; new_class_messages: %s", relevant_class_messages, new_class_messages)
     _logger.debug("processed_classes: %s", processed_classes)

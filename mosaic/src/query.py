@@ -139,12 +139,15 @@ def process_single_qa(
     *,
     method: str = "hash",
     resume: bool = False,
+    only_categories: list[int] | None = None,
 ):
     """处理单个 qa 文件：检索 + LLM 作答 + LLM 评判。method: \"llm\"（类感知+实例检索用 LLM 路径）或 \"hash\"（TF-IDF 检索）。"""
     print(f"\n处理QA文件: {os.path.basename(qa_file_path)}")
     print(f"使用图文件: {os.path.basename(graph_file_path)}")
     print(f"使用标签文件: {os.path.basename(tag_file_path)}")
     print(f"检索方式: {method}")
+    if only_categories:
+        print(f"仅评测分类: {only_categories}")
     print(f"输出文件: {output_file_path}")
     if output_file_path and output_file_path != os.devnull:
         print(f"QA 断点（每题落盘）: {_qa_partial_path(output_file_path)}；续跑请加 --resume")
@@ -224,6 +227,7 @@ def process_single_qa(
         memory,
         query_fn,
         skip_category=5,
+        only_categories=only_categories,
         max_questions=max_questions,
         progress_callback=lambda total, correct, acc: print(f"当前进度: 已处理 {total} 个问题，准确率: {acc:.2%}"),
         initial_qa_results=initial_qa,
