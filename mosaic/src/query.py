@@ -21,7 +21,7 @@ from src.assist import (
 )
 from src.llm.telemetry import llm_phase_scope
 from src.logger import setup_logger
-from src.qa_common import judge_answer_llm, run_qa_loop
+from src.qa_common import judge_answer_llm, run_qa_loop, print_qa_summary
 
 _logger = setup_logger("graph query")
 
@@ -105,28 +105,6 @@ def query_with_telemetry(question: str, memory: ClassGraph, method: str = "llm")
             "total_ms": round(total_ms, 3),
         },
     }
-
-
-def _print_qa_summary(qa_results, category_stats, error_records, qa_file_name):
-    total_count = len(qa_results)
-    total_correct = sum(1 for r in qa_results if r.get("judgment") == "CORRECT")
-    total_wrong = sum(1 for r in qa_results if r.get("judgment") == "WRONG")
-    print("\n" + "=" * 50)
-    print(f"✅ {qa_file_name} 处理完成!")
-    print("=" * 50)
-    if error_records:
-        print(f"❌ 错误统计: 共 {len(error_records)} 个问题处理失败")
-    else:
-        print("✅ 所有问题处理成功，无错误发生")
-    print("\n分类准确率:")
-    for cat in sorted(category_stats.keys()):
-        stats = category_stats[cat]
-        if stats["total"] > 0:
-            acc = stats["correct"] / stats["total"]
-            print(f"Category {cat}: {stats['correct']}/{stats['total']} = {acc:.2%}")
-    if total_count > 0:
-        print(f"\n总体准确率: {total_correct}/{total_count} = {total_correct / total_count:.2%}")
-    print(f"正确: {total_correct} | 错误: {total_wrong}")
 
 
 def process_single_qa(
@@ -277,7 +255,7 @@ def process_single_qa(
     with open(summary_file_path, "w", encoding="utf-8") as f:
         json.dump(summary_only if output_file_path else result_data, f, ensure_ascii=False, indent=2)
     print(f"汇总已保存到: {summary_file_path}")
-    _print_qa_summary(qa_results, category_stats, error_records, os.path.basename(qa_file_path))
+    print_qa_summary(qa_results, category_stats, error_records, os.path.basename(qa_file_path))
     return result_data
 
 

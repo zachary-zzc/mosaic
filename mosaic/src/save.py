@@ -21,12 +21,12 @@ from src.assist import (
 from src.config_loader import get_control_profile
 from src.logger import log_pipeline_event, setup_logger
 from src.llm.telemetry import (
+    append_ingest_record,
     dump_build_metrics_file,
     get_llm_counters,
     llm_phase_scope,
     reset_build_llm_counters,
 )
-from src.telemetry.ingest_log import append_ingest_record
 
 _logger = setup_logger("save")
 

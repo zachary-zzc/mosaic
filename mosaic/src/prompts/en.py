@@ -1,5 +1,3 @@
-# Backward-compatible re-exports — canonical location is src/prompts/
-from src.prompts.en import *  # noqa: F401,F403
 PROMPT_NEW_CLASS_SENSE = """
 # Task Objective: Create appropriate categories for the given information fragments.
 

@@ -21,6 +21,29 @@ except ImportError:
 _logger = setup_logger("qa_common")
 
 
+def print_qa_summary(qa_results, category_stats, error_records, qa_file_name):
+    """Shared QA result summary printer."""
+    total_count = len(qa_results)
+    total_correct = sum(1 for r in qa_results if r.get("judgment") == "CORRECT")
+    total_wrong = total_count - total_correct
+    print("\n" + "=" * 50)
+    print(f"\u2705 {qa_file_name} \u5904\u7406\u5b8c\u6210!")
+    print("=" * 50)
+    if error_records:
+        print(f"\u274c \u9519\u8bef\u7edf\u8ba1: \u5171 {len(error_records)} \u4e2a\u95ee\u9898\u5904\u7406\u5931\u8d25")
+    else:
+        print("\u2705 \u6240\u6709\u95ee\u9898\u5904\u7406\u6210\u529f\uff0c\u65e0\u9519\u8bef\u53d1\u751f")
+    print("\n\u5206\u7c7b\u51c6\u786e\u7387:")
+    for cat in sorted(category_stats.keys()):
+        stats = category_stats[cat]
+        if stats["total"] > 0:
+            acc = stats["correct"] / stats["total"]
+            print(f"Category {cat}: {stats['correct']}/{stats['total']} = {acc:.2%}")
+    if total_count > 0:
+        print(f"\n\u603b\u4f53\u51c6\u786e\u7387: {total_correct}/{total_count} = {total_correct / total_count:.2%}")
+    print(f"\u6b63\u786e: {total_correct} | \u9519\u8bef: {total_wrong}")
+
+
 def _label_from_judge_response(content: str | None) -> str:
     """Parse judge JSON or infer CORRECT/WRONG from text; default WRONG if ambiguous."""
     raw = (content or "").strip()

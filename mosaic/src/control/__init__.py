@@ -1,5 +1,4 @@
 """轨 C / P-3：对话控制与打分（docs/optimization.md §6、§10）。"""
-from src.control.dialog_controller import DialogController, TurnTrace
 from src.control.scoring import (
     communities_from_g_a,
     communities_louvain_ga,
@@ -10,8 +9,6 @@ from src.control.scoring import (
 )
 
 __all__ = [
-    "DialogController",
-    "TurnTrace",
     "communities_from_g_a",
     "communities_louvain_ga",
     "importance_entropy_placeholder",
